@@ -19,17 +19,13 @@ static int do_generic_cmd(const char *me, char *arg)
 	return execv_git_cmd(my_argv);
 }
 
-static int do_cvs_cmd(const char *me, char *arg)
+static int do_cvs_cmd(void)
 {
 	const char *cvsserver_argv[3] = {
 		"cvsserver", "server", NULL
 	};
 
-	if (!arg || strcmp(arg, "server"))
-		die("git-cvsserver only handles server: %s", arg);
-
 	setup_path(NULL);
-
 	return execv_git_cmd(cvsserver_argv);
 }
 
@@ -40,7 +36,6 @@ static struct commands {
 } cmd_list[] = {
 	{ "git-receive-pack", do_generic_cmd },
 	{ "git-upload-pack", do_generic_cmd },
-	{ "cvs", do_cvs_cmd },
 	{ NULL },
 };
 
@@ -49,15 +44,24 @@ int main(int argc, char **argv)
 	char *prog;
 	struct commands *cmd;
 
+	/*
+	 * Special hack to pretend to be a CVS server
+	 */
 	if (argc == 2 && !strcmp(argv[1], "cvs server"))
-		argv--;
-	/* We want to see "-c cmd args", and nothing else */
-	else if (argc != 3 || strcmp(argv[1], "-c"))
+		exit(do_cvs_cmd());
+
+	/*
+	 * We do not accept anything but "-c" followed by "cmd arg",
+	 * where "cmd" is a very limited subset of git commands.
+	 */
+	if (argc != 3 || strcmp(argv[1], "-c"))
 		die("What do you think I am? A shell?");
 
 	prog = argv[2];
-	argv += 2;
-	argc -= 2;
+	if (!strncmp(prog, "git", 3) && isspace(prog[3]))
+		/* Accept "git foo" as if the caller said "git-foo". */
+		prog[3] = '-';
+
 	for (cmd = cmd_list ; cmd->name ; cmd++) {
 		int len = strlen(cmd->name);
 		char *arg;
