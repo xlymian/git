@@ -11,6 +11,7 @@
 #include "cache-tree.h"
 #include "diff.h"
 #include "revision.h"
+#include "replay.h"
 
 /*
  * This implements the builtins revert and cherry-pick.
@@ -270,6 +271,12 @@ static int merge_changes(const char *head_sha1,
 			 const char *next_sha1,
 			 const char *next_label)
 {
+	int status;
+
+	status = replay_trees(base_sha1, head_sha1, "HEAD",
+			      next_sha1, next_label);
+	if (status >= 0)
+		return status;
 	return merge_recursive(base_sha1, head_sha1, "HEAD",
 			       next_sha1, next_label);
 }
