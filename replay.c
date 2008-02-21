@@ -8,124 +8,76 @@
 #include "diff.h"
 #include "diffcore.h"
 
-struct merge_nu_ce {
-	const unsigned char *sha1;
-	unsigned mode;
-};
-
-struct merge_nu_ent {
-	const char *our_path;
-	const char *result_path;
-	struct merge_nu_ce base;
-	struct merge_nu_ce ours;
-	struct merge_nu_ce theirs;
-
-	enum {
-		NU_STRUCTURE_OURS = 0,
-		NU_STRUCTURE_THEIRS,
-		NU_STRUCTURE_CONFLICT_OURS,
-		NU_STRUCTURE_CONFLICT_THEIRS,
-	} structure_result;
-	enum {
-		NU_OURS = 0,
-		NU_THEIRS,
-		NU_ADD,
-		NU_DELETE,
-		NU_MERGE,
-		NU_DELETE_MODIFY,
-		NU_MODIFY_DELETE,
-		NU_ADD_ADD,
-	} content_result;
-
-	unsigned result_conflict : 1;
-	unsigned long result_size;
-	char *result_data;
-};
-
-struct merge_nu {
-	int nr;
-	int alloc;
-	struct merge_nu_ent *ent;
-};
-
-static void clear_nu(struct merge_nu *nu)
-{
-	nu->nr = 0;
-	nu->alloc = 0;
-	free(nu->ent);
-}
-
-static struct merge_nu_ent *alloc_nu_ent(struct merge_nu *nu)
-{
-	int pos = nu->nr++;
-	struct merge_nu_ent *ent;
-
-	ALLOC_GROW(nu->ent, nu->nr, nu->alloc);
-	ent = &(nu->ent[pos]);
-	memset(ent, 0, sizeof(*ent));
-	return ent;
-}
-
 static inline int same(struct diff_filespec *a, struct diff_filespec *b)
 {
 	return ((a->mode && b->mode) && !hashcmp(a->sha1, b->sha1));
 }
 
-static void merge_entry(struct merge_nu_ent *ent,
-			struct diff_filespec *base,
-			struct diff_filespec *our,
-			struct diff_filespec *their)
+static int resolve_to(struct index_state *istate,
+		      struct diff_filespec *it,
+		      const char *path)
 {
 	/*
-	 * The changes "our" and "their" correspond to what happened
-	 * to the common ancestor on both sides.  We compute how our
-	 * tree should be transformed to reach the merge result.
+	 * The "path" is resolved to "it".  Reflect that to the
+	 * resulting index.
 	 *
-	 * Note that we will never see cases where their side did not
-	 * do anything here, as the caller is walking their changes.
-	 *
-	 * There are three things they could have done.  Delete,
-	 * modify (possibly with rename), or create.
+	 * Make sure that the index entry at path matches with
+	 * HEAD, and if it is different from what we are resolving
+	 * to (i.e. "it"), the work tree is also clean, before doing so.
 	 */
 
-	/* Record basic 3-way merge information */
-	ent->base.mode = base->mode;
-	ent->base.sha1 = base->sha1;
-	ent->ours.mode = our->mode;
-	ent->ours.sha1 = our->sha1;
-	ent->theirs.mode = their->mode;
-	ent->theirs.sha1 = their->sha1;
+	return -1; /* not yet */
+}
 
+static int stage_to(struct index_state *istate,
+		    struct diff_filespec *stage_1,
+		    struct diff_filespec *stage_2,
+		    struct diff_filespec *stage_3,
+		    const char *path)
+{
+	/*
+	 * The changes to "path" are conflicting.
+	 */
+
+	return -1; /* not yet */
+}
+
+static int merge_at(struct index_state *istate,
+		    struct diff_filespec *base,
+		    struct diff_filespec *our,
+		    struct diff_filespec *their,
+		    const char *path)
+{
 	/*
 	 * Did they delete it?
 	 */
 	if (!their->mode) {
-		if (!our->mode)
+		if (!our->mode) {
 			/* We both deleted; keep it deleted */
-			ent->content_result = NU_OURS;
-		else if (same(base, our))
+			return 0;
+		} else if (same(base, our)) {
 			/* We did not touch; let them delete in our tree */
-			ent->content_result = NU_DELETE;
-		else
+			return resolve_to(istate, NULL, path);
+		} else {
 			/* We modified while they deleted */
-			ent->content_result = NU_MODIFY_DELETE;
-		return;
+			return stage_to(istate, base, NULL, their, path);
+		}
 	}
 
 	/*
 	 * Did they create it?
 	 */
 	if (!base->mode) {
-		if (!our->mode)
+		if (!our->mode) {
 			/* We didn't; let them create in our tree */
-			ent->content_result = NU_ADD;
-		else if (same(their, our))
+			return resolve_to(istate, their, path);
+		} else if (same(their, our)) {
 			/* Both of us created the same way; keep it */
-			ent->content_result = NU_OURS;
-		else
+			return 0;
+		} else {
 			/* Created differently; needs a two-way merge */
-			ent->content_result = NU_ADD_ADD;
-		return;
+			return stage_to(istate, NULL, our, their, path);
+		}
 	}
 
 	/*
@@ -133,89 +85,64 @@ static void merge_entry(struct merge_nu_ent *ent,
 	 */
 	if (same(their, our)) {
 		/* The same contents; keep it */
-		ent->content_result = NU_OURS;
-		return;
+		return 0;
 	}
 
 	if (!our->mode) {
-		/* We deleted; a conflict */
-		ent->content_result = NU_DELETE_MODIFY;
-		return;
+		/* We deleted while they modified */
+		return stage_to(istate, base, NULL, their, path);
 	}
 
 	if (same(base, our)) {
 		/* We did not touch; let them modify in our tree */
-		ent->content_result = NU_THEIRS;
-		return;
+		return resolve_to(istate, their, path);
 	}
 
 	/* Otherwise we would need a 3-way merge */
-	ent->content_result = NU_MERGE;
+	return stage_to(istate, base, our, their, path);
 }
 
-static void merge_single_change(struct merge_nu *nu,
-				struct diff_filepair *our_pair,
-				struct diff_filepair *their_pair)
+static int merge_single_change(struct index_state *istate,
+			       struct diff_filepair *our_pair,
+			       struct diff_filepair *their_pair)
 {
-	struct merge_nu_ent *ent;
-	struct diff_filespec *base, *our, *their;
+	/*
+	 * Structural 3-way merge.  Determine where in the final tree
+	 * the resulting contents should go.  "our_pair" could be NULL
+	 * when we do not have a matching filepair (i.e. our side did
+	 * not modify since the common ancestor).
+	 */
+	struct diff_filespec *base = their_pair->one;
+	struct diff_filespec *our = our_pair ? our_pair->two : their_pair->one;
+	struct diff_filespec *their = their_pair->two;
 
 	/*
-	 * Structural 3-way merge.  Determine what path the resulting
-	 * contents should go.  "our_pair" could be NULL when we do
-	 * not have a matching filepair (i.e. our side did not modify
-	 * since the common ancestor).
+	 * If they renamed while we didn't, our path need to be
+	 * moved, but we may have local untracked but unignored
+	 * files (NEEDSWORK: we may need to introduce "precious"
+	 * untracked files later) or tracked files that may interfere
+	 * with it.
 	 */
-	base = their_pair->one;
-	our = our_pair ? our_pair->two : their_pair->one;
-	their = their_pair->two;
-
-	ent = alloc_nu_ent(nu);
-	ent->our_path = our->path;
-
-	/* Assume everything went well */
-	ent->structure_result = NU_STRUCTURE_OURS;
-
-	/*
-	 * Is there a rename involved?
-	 */
-	if (DIFF_PAIR_RENAME(their_pair) ||
-	    (our_pair && DIFF_PAIR_RENAME(our_pair))) {
+	if (DIFF_PAIR_RENAME(their_pair)) {
 		if (!our_pair || !DIFF_PAIR_RENAME(our_pair)) {
-			/* We did not rename; take their rename. */
-			ent->result_path = their->path;
-			ent->structure_result = NU_STRUCTURE_THEIRS;
-		}
-		else if (!DIFF_PAIR_RENAME(their_pair)) {
-			/* They did not rename; take our rename. */
-			ent->result_path = our->path;
-		}
-		else {
+			/* We didn't -- take their rename */
+			return (resolve_to(istate, NULL, our->path) |
+				merge_at(istate, base, our, their,
+					 their->path));
+		} else if (!strcmp(our->path, their->path)) {
+			/* Renamed the same way as ours */
+			return merge_at(istate, base, our, their, our->path);
+		} else {
 			/* Renamed differently */
-			ent->result_path = our->path;
-			ent->structure_result = NU_STRUCTURE_CONFLICT_OURS;
+			return (stage_to(istate, base, our, NULL,
+					 our->path) |
+				stage_to(istate, base, NULL, their,
+					 their->path));
 		}
-	} else
-		ent->result_path = our->path; /* Neither side renamed */
-
-	/*
-	 * Content level merge
-	 */
-	merge_entry(ent, base, our, their);
-
-	if (ent->structure_result != NU_STRUCTURE_CONFLICT_OURS)
-		return;
-
-	/*
-	 * They wanted to rename base->path to their->path while we
-	 * moved it to our->path.  "ent" is our half, and we create
-	 * their half now.
-	 */
-	ent = alloc_nu_ent(nu);
-	ent->our_path = their->path;
-	ent->result_path = their->path;
-	merge_entry(ent, base, our, their);
-	ent->structure_result = NU_STRUCTURE_CONFLICT_THEIRS;
+	}
+	else {
+		return merge_at(istate, base, our, their, our->path);
+	}
 }
 
 static int path_compare(const void *path_, const void *pair_)
@@ -247,9 +174,9 @@ static struct diff_filepair *match_filepair(struct diff_queue_struct *q,
 	return *((struct diff_filepair **)found);
 }
 
-static void match_changes(struct merge_nu *nu,
-			  struct diff_queue_struct *our_change,
-			  struct diff_queue_struct *their_change)
+static int match_changes(struct index_state *istate,
+			 struct diff_queue_struct *our_change,
+			 struct diff_queue_struct *their_change)
 {
 	/*
 	 * We have taken two diffs (common ancestor vs ours, and
@@ -258,14 +185,17 @@ static void match_changes(struct merge_nu *nu,
 	 * insn to transform our tree to the resulting tree.
 	 */
 	int i;
+	int status = 0;
 
 	for (i = 0; i < their_change->nr; i++) {
 		struct diff_filepair *ours, *theirs;
 
 		theirs = their_change->queue[i];
 		ours = match_filepair(our_change, their_change->queue[i]);
-		merge_single_change(nu, ours, theirs);
+		status |= merge_single_change(istate, ours, theirs);
 	}
+
+	return status;
 }
 
 static int preimage_path_cmp(const void *a_, const void *b_)
@@ -349,84 +279,6 @@ static void get_tree_diff(struct diff_queue_struct *changes,
 	free(new_data);
 }
 
-static int show_merge_nu(struct merge_nu *nu)
-{
-	int i, status;
-	struct index_state nu_index;
-
-	/*
-	 * Reflect the change they made since the common ancestor
-	 * to the current tree, but make sure we detect conflicting
-	 * changes.
-	 */
-	status = -1;
-	memset(&nu_index, 0, sizeof(nu_index));
-	read_index(&nu_index);
-
-	/*
-	 * Their otherwise clean deletion must be prevented if we have
-	 * modifications at the path.
-	 *
-	 * Their otherwise clean addition must be prevented if we have
-	 * modifications or untracked but unignored files at places
-	 * that will be nuked due to D/F conflicts.
-	 */
-	for (i = 0; i < nu->nr; i++) {
-		const char *our_their = NULL;
-		struct merge_nu_ent *ent = &(nu->ent[i]);
-
-		fprintf(stderr, "%s: ", ent->our_path);
-		if (strcmp(ent->our_path, ent->result_path))
-			fprintf(stderr, "rename to %s ", ent->result_path);
-		switch (ent->structure_result) {
-		default:
-			break;
-		case NU_STRUCTURE_CONFLICT_OURS:
-			our_their = "ours";
-			break;
-		case NU_STRUCTURE_CONFLICT_THEIRS:
-			our_their = "theirs";
-			break;
-		}
-		if (our_their)
-			fprintf(stderr, "rename conflict: %s half: %s: ",
-				our_their, ent->result_path);
-
-		switch (ent->content_result) {
-		case NU_DELETE_MODIFY:
-			fprintf(stderr, "delete/modify conflict");
-			break;
-		case NU_MODIFY_DELETE:
-			fprintf(stderr, "modify/delete conflict");
-			break;
-		case NU_ADD_ADD:
-			fprintf(stderr, "add/add conflict");
-			break;
-		case NU_OURS:
-			fprintf(stderr, "take our version");
-			break;
-		case NU_THEIRS:
-			fprintf(stderr, "take their version");
-			break;
-		case NU_ADD:
-			fprintf(stderr, "take their addition");
-			break;
-		case NU_DELETE:
-			fprintf(stderr, "take their deletion");
-			break;
-		case NU_MERGE:
-			fprintf(stderr, "merge with theirs");
-			break;
-		default:
-			fprintf(stderr, "Huh?");
-			break;
-		}
-		fprintf(stderr, "\n");
-	}
-	discard_index(&nu_index);
-	return status;
-}
-
 /*
  * Take "diff -M" for common ancestor vs ours and common ancestor vs theirs
  * to figure out what happened to each of the paths in the ancestor.
@@ -446,7 +298,7 @@ int replay_trees(const char *base_sha1,
 	 */
 	struct diff_queue_struct our_changes;
 	struct diff_queue_struct their_changes;
-	struct merge_nu nu;
+	struct index_state istate;
 	struct tree *base_tree, *our_tree, *their_tree;
 	int i, status;
 
@@ -459,17 +311,11 @@ int replay_trees(const char *base_sha1,
 	get_tree_diff(&our_changes, base_tree, our_tree);
 	get_tree_diff(&their_changes, base_tree, their_tree);
 
-	memset(&nu, 0, sizeof(nu));
-	clear_nu(&nu);
-	match_changes(&nu, &our_changes, &their_changes);
+	memset(&istate, 0, sizeof(istate));
+	if (read_index(&istate))
+		return error("cannot read the index file");
 
-	/*
-	 * NEEDSWORK: merge_nu[] contains list of insns to transform
-	 * our tree into merge result.  There may however be insns to
-	 * cause D/F conflicts, in which case they need to be fuzzed
-	 * when we are building a virtual common ancestor tree.
-	 */
-	status = show_merge_nu(&nu);
+	status = match_changes(&istate, &our_changes, &their_changes);
 
 	for (i = 0; i < our_changes.nr; i++)
 		diff_free_filepair(our_changes.queue[i]);
