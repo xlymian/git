@@ -1,5 +1,6 @@
 #include "builtin.h"
 #include "cache.h"
+#include "parse-options.h"
 
 /*
  * Returns the length of a line, without trailing spaces.
@@ -34,9 +35,10 @@ static size_t cleanup(char *line, size_t len)
  *
  * Enable skip_comments to skip every line starting with "#".
  */
-void stripspace(struct strbuf *sb, int skip_comments)
+void stripspace(struct strbuf *sb, int flag)
 {
 	int empties = 0;
+	int skip_comments = flag & STRIP_COMMENTS;
 	size_t i, j, len, newlen;
 	char *eol;
 
@@ -71,17 +73,23 @@ void stripspace(struct strbuf *sb, int skip_comments)
 int cmd_stripspace(int argc, const char **argv, const char *prefix)
 {
 	struct strbuf buf;
-	int strip_comments = 0;
+	int flag = 0;
+	struct option stripspace_options[] = {
+		OPT_BIT('s', "strip-comments", &flag,
+			"strip comments", STRIP_COMMENTS),
+		OPT_END()
+	};
+	static const char * const usage[] = {
+		"git-stripspace [-s] < input",
+		NULL,
+	};
 
-	if (argc > 1 && (!strcmp(argv[1], "-s") ||
-				!strcmp(argv[1], "--strip-comments")))
-		strip_comments = 1;
-
+	argc = parse_options(argc, argv, stripspace_options, usage, 0);
 	strbuf_init(&buf, 0);
 	if (strbuf_read(&buf, 0, 1024) < 0)
 		die("could not read the input");
 
-	stripspace(&buf, strip_comments);
+	stripspace(&buf, flag);
 
 	write_or_die(1, buf.buf, buf.len);
 	strbuf_release(&buf);

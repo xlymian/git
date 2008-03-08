@@ -594,7 +594,7 @@ static int message_is_empty(struct strbuf *sb, int start)
 	/* See if the template is just a prefix of the message. */
 	strbuf_init(&tmpl, 0);
 	if (template_file && strbuf_read_file(&tmpl, template_file, 0) > 0) {
-		stripspace(&tmpl, cleanup_mode == CLEANUP_ALL);
+		stripspace(&tmpl, ((cleanup_mode == CLEANUP_ALL) ? (-1) : 0));
 		if (start + tmpl.len <= sb->len &&
 		    memcmp(tmpl.buf, sb->buf + start, tmpl.len) == 0)
 			start += tmpl.len;
@@ -939,7 +939,7 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		strbuf_setlen(&sb, p - sb.buf + 1);
 
 	if (cleanup_mode != CLEANUP_NONE)
-		stripspace(&sb, cleanup_mode == CLEANUP_ALL);
+		stripspace(&sb, ((cleanup_mode == CLEANUP_ALL) ? (-1) : 0));
 	if (sb.len < header_len || message_is_empty(&sb, header_len)) {
 		rollback_index_files();
 		die("no commit message?  aborting commit.");
