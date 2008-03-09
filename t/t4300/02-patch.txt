@@ -1,0 +1,21 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: A U Thor <author@example.com>
+Date: Sun, 29 Jan 1995 10:00:00 -0800
+Subject: [PATCH] Add frotz/nitfol
+
+This adds frotz/nitfol.
+---
+ frotz/nitfol |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+ create mode 100644 frotz/nitfol
+
+diff --git a/frotz/nitfol b/frotz/nitfol
+new file mode 100644
+index 0000000..cf7711b
+--- /dev/null
++++ b/frotz/nitfol
+@@ -0,0 +1 @@
++xyzzy
+-- 
+1.5.4.4
+
