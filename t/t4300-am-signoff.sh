@@ -69,4 +69,13 @@ test_expect_failure 'apply fixes up s-o-b line (2)' '
 
 '
 
+test_expect_success 'apply with author'\''s s-o-b' '
+
+	git reset --hard initial &&
+	git am -s --forge ../t4300/07-patch.txt &&
+	git cat-file commit HEAD | sed -e "1,/^$/d" >actual &&
+	diff -u ../t4300/07-expect actual
+
+'
+
 test_done
