@@ -357,7 +357,7 @@ do
 			case "$keep_subject" in -k)  SUBJECT="[PATCH] $SUBJECT" ;; esac
 
 			(printf '%s\n\n' "$SUBJECT"; cat "$dotest/msg") |
-				git stripspace > "$dotest/msg-clean"
+				git stripspace $strip >"$dotest/msg-clean"
 		fi
 		;;
 	esac
