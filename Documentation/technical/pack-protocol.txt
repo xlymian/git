@@ -26,10 +26,12 @@ upload-pack (S) | fetch/clone-pack (C) protocol:
 	C: done
 	S: XXXXXXX -- packfile contents.
 
+----------------------------------------------------------------
+
 send-pack | receive-pack protocol.
 
 	# Tell the pusher what commits we have and what their names are
-	C: SHA1 name
+	C: SHA1 name (capabilities)
 	C: ...
 	C: SHA1 name
 	C: # flush -- it's your turn
@@ -39,3 +41,60 @@ send-pack | receive-pack protocol.
 	S: ...
 	S: # flush -- done with the list
 	S: XXXXXXX --- packfile contents.
+
+When tellme-more extension is used:
+
+	# Tell the pusher what commits we have and what their names are
+	C: SHA1 name (capabilities)
+	C: ...
+	C: SHA1 name
+	C: # flush -- it's your turn
+	# Tell the puller what the pusher has
+	S: old-SHA1 new-SHA1 name
+	S: old-SHA1 new-SHA1 name
+	S: tellme-more old-SHA1	-- I do not know about this one,
+	S: tellme-more old-SHA1 -- give me ancestors of them.
+	S: # flush -- done with the list
+	# Tell the pusher more about history
+	C: SHA1 old-SHA1 -- This is ancestor of that, you might know
+	C: SHA1 old-SHA1
+	C: ...
+	C: # flush -- have you heard ehough?
+	S: tellme-more old-SHA1' -- I still want to know more about this one
+	S: # flush -- please give me more
+	C: SHA1 old-SHA1'
+	C: SHA1 old-SHA1'
+	C: ...
+	C: # flush -- have you heard ehough?
+	S: # flush -- yes, thanks, we've heard enough
+	S: XXXXXXX --- packfile contents.
+
+1. Receiver sends its refs and advertises its capabilities.
+
+2. Sender sends its intention to update which refs from what old value to
+   what new value.
+
+3. Sender can choose to do tellme-more conversation or choose not to.
+
+3-a. If Sender chooses to ask tellme-more questions, then it sends one or
+     more "tellme-more SHA-1", and ends them with a flush.  The parties
+     move to state #4.
+
+3-b. If Sender does not want to ask tellme-more questions, it sends a
+     flush.  The parties move to state #5.
+
+4. Receiver can choose to continue tellme-more conversation, or it can
+   choose to terminate it.
+
+4-a. If Receiver chooses to continue tellme-more conversation, it responds
+     with sequence of "ancestor SHA-1".  The SHA-1 should match one of the
+     SHA-1 Sender asked about with its tellme-more request.  It ends them
+     with a flush.  The parties move to state #3.
+
+4-b. If Receiver chooses to terminate tellme-more conversation, it sends a
+     flush.  The parties move to state #3 (and implicitly asks Sender to
+     choose #3-b).
+
+5. Receiver awaits the packfile contents to come.  Sender sends the
+   packfile payload.
+

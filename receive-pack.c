@@ -16,7 +16,7 @@ static int transfer_unpack_limit = -1;
 static int unpack_limit = 100;
 static int report_status;
 
-static char capabilities[] = " report-status delete-refs ";
+static char capabilities[] = " report-status delete-refs tellme-more ";
 static int capabilities_sent;
 
 static int receive_pack_config(const char *var, const char *value)
@@ -299,7 +299,23 @@ static void execute_commands(const char *unpacker_error)
 	}
 }
 
-static void read_head_info(void)
+static int parse_tellme_more(char *line, int len, struct commit_list **list)
+{
+	unsigned char sha1[20];
+	struct commit *c;
+
+	if (52 <= len &&
+	    !strncmp(line, "tellme-more ", 12) &&
+	    !get_sha1_hex(line + 12, sha1)) {
+		c = lookup_commit_reference_gently(sha1, 1);
+		if (c)
+			commit_list_insert(c, list);
+		return 1;
+	}
+	return 0;
+}
+
+static void read_head_info(struct commit_list **tellme_more)
 {
 	struct command **p = &commands;
 	for (;;) {
@@ -314,6 +330,8 @@ static void read_head_info(void)
 			break;
 		if (line[len-1] == '\n')
 			line[--len] = 0;
+		if (parse_tellme_more(line, len, tellme_more))
+			continue;
 		if (len < 83 ||
 		    line[40] != ' ' ||
 		    line[81] != ' ' ||
@@ -336,6 +354,136 @@ static void read_head_info(void)
 		cmd->next = NULL;
 		*p = cmd;
 		p = &cmd->next;
+	}
+}
+
+static void sender_wants_more(struct commit_list **tellme_more)
+{
+	char line[1024];
+	int len;
+
+	while (1) {
+		len = packet_read_line(0, line, sizeof(line));
+		if (!len)
+			return;
+		if (line[len-1] == '\n')
+			line[--len] = '\0';
+		if (parse_tellme_more(line, len, tellme_more))
+			continue;
+		/* ignore other responses for future extension */
+	}
+}
+
+#define SHOWN_TO_SENDER (1<<20)
+static struct commit_list **add_parents(struct commit *commit, struct commit_list **tail, int round)
+{
+	struct commit_list *parents = commit->parents;
+
+	/*
+	 * In round N, we will send one commit for every (N+1)^2
+	 * commits in single parent chain to optimize for very stale
+	 * pushers.
+	 */
+	round *= round;
+	while (round--) {
+		if (!parents || (parents && parents->next))
+			break; /* do not skip merges */
+		commit = parents->item;
+		if (parse_commit(commit))
+			return tail; /* oops */
+		if (!commit->parents)
+			break; /* do not skip root */
+		/*
+		 * Before skipping this commit, mark it so that
+		 * later clear_commit_marks() can clear its ancestors.
+		 */
+		commit->object.flags |= SHOWN_TO_SENDER;
+		parents = commit->parents;
+	}
+
+	while (parents) {
+		commit = parents->item;
+		parents = parents->next;
+		if (commit->object.flags & SHOWN_TO_SENDER)
+			continue;
+		if (parse_commit(commit))
+			continue;
+		tail = &commit_list_insert(commit, tail)->next;
+	}
+	return tail;
+}
+
+#define BATCH 20
+static void send_ancestors(struct commit *commit, int round)
+{
+	struct commit_list *list = NULL;
+	struct commit_list **tail = &list;
+	int count = 0;
+
+	tail = &commit_list_insert(commit, tail)->next;
+	while (list && count < BATCH) {
+		struct commit_list *elem = list;
+		struct commit *c = elem->item;
+
+		list = list->next;
+		free(elem);
+		if (!list)
+			tail = &list;
+
+		if (c->object.flags & SHOWN_TO_SENDER)
+			continue;
+		if (parse_commit(c))
+			continue;
+		c->object.flags |= SHOWN_TO_SENDER;
+		if (c != commit) {
+			packet_write(1, "%s %s\n",
+				     sha1_to_hex(c->object.sha1),
+				     sha1_to_hex(commit->object.sha1));
+			count++;
+		}
+		tail = add_parents(c, tail, round);
+	}
+	clear_commit_marks(commit, SHOWN_TO_SENDER);
+	free_commit_list(list);
+}
+
+#define MAX_ROUND 5
+static void exchange_history(struct commit_list *list)
+{
+	int round = 0;
+
+	while (list) {
+		while (list) {
+			struct commit_list *elem = list;
+			struct commit *commit = elem->item;
+
+			list = list->next;
+			free(elem);
+
+			/*
+			 * The sender does not know about commit and asks its
+			 * ancestors to be sent.
+			 */
+			if (parse_commit(commit))
+				continue;
+
+			send_ancestors(commit, round);
+		}
+		packet_flush(1); /* have you heard enough? */
+
+		sender_wants_more(&list);
+		round++;
+		if (MAX_ROUND < round) {
+			while (list) {
+				/* sorry, no more */
+				packet_flush(1);
+				free_commit_list(list);
+				list = NULL;
+				/* wait until the other end gives up */
+				sender_wants_more(&list);
+			}
+			break;
+		}
 	}
 }
 
@@ -465,6 +613,7 @@ int main(int argc, char **argv)
 {
 	int i;
 	char *dir = NULL;
+	struct commit_list *tellme_more = NULL;
 
 	argv++;
 	for (i = 1; i < argc; i++) {
@@ -501,7 +650,11 @@ int main(int argc, char **argv)
 	/* EOF */
 	packet_flush(1);
 
-	read_head_info();
+	read_head_info(&tellme_more);
+
+	if (tellme_more)
+		exchange_history(tellme_more);
+
 	if (commands) {
 		const char *unpack_status = NULL;
 
