@@ -250,17 +250,19 @@ else
 	# We are invoked directly as the first-class UI.
 	head_arg=HEAD
 
-	# All the rest are the commits being merged; prepare
-	# the standard merge summary message to be appended to
-	# the given message.  If remote is invalid we will die
-	# later in the common codepath so we discard the error
-	# in this loop.
-	merge_name=$(for remote
-		do
-			merge_name "$remote"
-		done | git fmt-merge-msg
-	)
-	merge_msg="${merge_msg:+$merge_msg$LF$LF}$merge_name"
+	if test -z "$merge_msg"
+	then
+		# All the rest are the commits being merged; prepare
+		# the standard merge summary message to be appended to
+		# the given message.  If remote is invalid we will die
+		# later in the common codepath so we discard the error
+		# in this loop.
+		merge_msg=$(for remote
+			do
+				merge_name "$remote"
+			done | git fmt-merge-msg
+		)
+	fi
 fi
 head=$(git rev-parse --verify "$head_arg"^0) || usage
 
