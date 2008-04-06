@@ -5,10 +5,6 @@
 -n, \--no-stat::
 	Do not show diffstat at the end of the merge.
 
---summary, \--no-summary::
-	Synonyms to --stat and --no-stat; these are deprecated and will be
-	removed in the future.
-
 --log::
 	In addition to branch names, populate the log message with
 	one-line descriptions from the actual commits that are being

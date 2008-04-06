@@ -33,10 +33,6 @@ OPTIONS
 	Do not list one-line descriptions from the actual commits being
 	merged.
 
---summary,--no-summary::
-	Synonyms to --log and --no-log; these are deprecated and will be
-	removed in the future.
-
 --file <file>, -F <file>::
 	Take the list of merged objects from <file> instead of
 	stdin.
@@ -47,10 +43,6 @@ CONFIGURATION
 merge.log::
 	Whether to include summaries of merged commits in newly
 	merge commit messages. False by default.
-
-merge.summary::
-	Synonym to `merge.log`; this is deprecated and will be removed in
-	the future.
 
 SEE ALSO
 --------
