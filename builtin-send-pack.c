@@ -15,6 +15,14 @@ static struct send_pack_args args = {
 	/* .receivepack = */ "git-receive-pack",
 };
 
+static struct additional_base {
+	unsigned char tip[20];
+	unsigned char last[20];
+	struct commit *commit;
+} *unknown;
+static int unknown_nr;
+static int unknown_alloc;
+
 /*
  * Make a pack stream and spit it out into file descriptor fd
  */
@@ -69,6 +77,23 @@ static int pack_objects(int fd, struct ref *refs)
 				break;
 		}
 		refs = refs->next;
+	}
+
+	if (unknown) {
+		int i;
+		char buf[42];
+
+		for (i = 0; i < unknown_nr; i++) {
+			struct commit *c = unknown[i].commit;
+			if (!c)
+				continue;
+			memcpy(buf + 1, sha1_to_hex(c->object.sha1), 40);
+			buf[0] = '^';
+			buf[41] = '\n';
+			if (!write_or_whine(po.in, buf, 42,
+					    "send-pack: send additional base"))
+				break;
+		}
 	}
 
 	close(po.in);
@@ -373,6 +398,79 @@ static int refs_pushed(struct ref *ref)
 	return 0;
 }
 
+static void ask_for_more(int in, int out, struct ref *remote_refs)
+{
+	struct ref *refs;
+	int i;
+
+	for (refs = remote_refs; refs; refs = refs->next) {
+		struct commit *commit;
+
+		if (is_null_sha1(refs->old_sha1))
+			continue;
+		commit = lookup_commit_reference_gently(refs->old_sha1, 1);
+		if (!commit) {
+			ALLOC_GROW(unknown, unknown_nr+1, unknown_alloc);
+			hashcpy(unknown[unknown_nr].last, refs->old_sha1);
+			unknown[unknown_nr].commit = NULL;
+			unknown_nr++;
+		}
+	}
+	if (!unknown_nr) {
+		packet_flush(out);
+		return;
+	}
+
+	for (i = 0; i < 5; i++) {
+		int j, sent = 0;
+		for (j = 0; j < unknown_nr; j++) {
+			if (unknown[j].commit)
+				continue;
+			hashcpy(unknown[j].tip, unknown[j].last);
+			packet_write(out, "tellme-more %s\n",
+				     sha1_to_hex(unknown[j].tip));
+			sent++;
+		}
+		packet_flush(out);
+		if (!sent)
+			return;
+		sent = 0;
+		while (1) {
+			char line[1000];
+			unsigned char tip[20];
+			unsigned char last[20];
+			int len;
+			struct commit *commit;
+
+			len = packet_read_line(in, line, sizeof(line));
+			if (!len)
+				break;
+			sent++;
+			if (line[len-1] == '\n')
+				line[--len] = '\0';
+			if (len < 81 ||
+			    line[40] != ' ' ||
+			    get_sha1_hex(line, last) ||
+			    get_sha1_hex(line + 41, tip))
+				die("protocol error: got '%s'", line);
+			for (j = 0; j < unknown_nr; j++) {
+				if (unknown[j].commit ||
+				    hashcmp(unknown[j].tip, tip))
+					continue;
+				hashcpy(unknown[j].last, last);
+				commit = lookup_commit_reference_gently(last, 1);
+				if (!commit)
+					continue;
+				unknown[j].commit = commit;
+			}
+		}
+		if (!sent)
+			/* they do not have any more to tell us */
+			break;
+	}
+	packet_flush(out);
+}
+
 static int do_send_pack(int in, int out, struct remote *remote, const char *dest, int nr_refspec, const char **refspec)
 {
 	struct ref *ref;
@@ -380,6 +478,7 @@ static int do_send_pack(int in, int out, struct remote *remote, const char *dest
 	int ask_for_status_report = 0;
 	int allow_deleting_refs = 0;
 	int expect_status_report = 0;
+	int can_ask_for_more = 0;
 	int flags = MATCH_REFS_NONE;
 	int ret;
 
@@ -397,6 +496,8 @@ static int do_send_pack(int in, int out, struct remote *remote, const char *dest
 		ask_for_status_report = 1;
 	if (server_supports("delete-refs"))
 		allow_deleting_refs = 1;
+	if (server_supports("tellme-more"))
+		can_ask_for_more = 1;
 
 	/* match them up */
 	if (!remote_tail)
@@ -495,7 +596,11 @@ static int do_send_pack(int in, int out, struct remote *remote, const char *dest
 			REF_STATUS_OK;
 	}
 
-	packet_flush(out);
+	if (can_ask_for_more && new_refs)
+		ask_for_more(in, out, remote_refs);
+	else
+		packet_flush(out);
+
 	if (new_refs && !args.dry_run) {
 		if (pack_objects(out, remote_refs) < 0)
 			return -1;
