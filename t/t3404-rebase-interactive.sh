@@ -73,7 +73,7 @@ esac
 test -z "$EXPECT_COUNT" ||
 	test "$EXPECT_COUNT" = $(sed -e '/^#/d' -e '/^$/d' < "$1" | wc -l) ||
 	exit
-test -z "$FAKE_LINES" && exit
+test -z "$FAKE_LINES" && { grep -v '^#' "$1"; exit; }
 grep -v '^#' < "$1" > "$1".tmp
 rm -f "$1"
 cat "$1".tmp
