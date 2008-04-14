@@ -92,9 +92,8 @@ for line in $FAKE_LINES; do
 		echo "merge ${line#merge}" | tr / ' '
 		echo "merge ${line#merge}" | tr / ' ' >> "$1";;
 	*)
-		echo sed -n "${line}s/^pick/$action/p"
-		sed -n "${line}p" < "$1".tmp
-		sed -n "${line}s/^pick/$action/p" < "$1".tmp >> "$1"
+		sed -n "${line}{s/^pick/$action/; p;}" < "$1".tmp
+		sed -n "${line}{s/^pick/$action/; p;}" < "$1".tmp >> "$1"
 		action=pick;;
 	esac
 done
