@@ -85,6 +85,9 @@ for line in $FAKE_LINES; do
 	mark*)
 		echo "mark ${line#mark}"
 		echo "mark ${line#mark}" >> "$1";;
+	reset*)
+		echo "reset ${line#reset}"
+		echo "reset ${line#reset}" >> "$1";;
 	*)
 		echo sed -n "${line}s/^pick/$action/p"
 		sed -n "${line}p" < "$1".tmp
@@ -204,6 +207,20 @@ test_expect_success 'setting marks works' '
 		"$(git rev-parse refs/rebase-marks/42)" &&
 	git rebase --abort &&
 	ls $marks_dir | wc -l | grep -Fx 0
+'
+
+test_expect_success 'reset with nonexistent mark fails' '
+	export FAKE_LINES="reset:0 1" &&
+	test_must_fail git rebase -i HEAD~1 &&
+	unset FAKE_LINES &&
+	git rebase --abort
+'
+
+test_expect_success 'reset to HEAD is a nop' '
+	test_tick &&
+	head=$(git rev-parse --short HEAD) &&
+	FAKE_LINES="reset$head" git rebase -i HEAD~4 &&
+	test "$(git rev-parse --short HEAD)" = "$head"
 '
 
 test_expect_success 'preserve merges with -p' '

@@ -349,6 +349,15 @@ do_next () {
 
 		git update-ref "$mark" HEAD || die "update-ref failed"
 		;;
+	reset|r)
+		comment_for_reflog reset
+
+		tmp=$(git rev-parse --verify "$(mark_to_ref $sha1)") ||
+			die "Invalid parent '$sha1' in $command $sha1 $rest"
+
+		mark_action_done
+		output git reset --hard $tmp
+		;;
 	*)
 		warn "Unknown command: $command $sha1 $rest"
 		die_with_patch $sha1 "Please fix this in the file $TODO."
@@ -570,6 +579,7 @@ do
 #  edit = use commit, but stop for amending
 #  squash = use commit, but meld into previous commit
 #  mark :mark = mark the current HEAD for later reference
+#  reset commit = reset HEAD to the commit
 #
 # If you remove a line here THAT COMMIT WILL BE LOST.
 # However, if you remove everything, the rebase will be aborted.
