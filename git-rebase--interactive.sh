@@ -125,6 +125,25 @@ has_action () {
 	grep '^[^#]' "$1" >/dev/null
 }
 
+redo_merge () {
+	rm_sha1=$1
+	shift
+
+	eval "$(get_author_ident_from_commit $rm_sha1)"
+	msg="$(git cat-file commit $rm_sha1 | sed -e '1,/^$/d')"
+
+	if ! GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
+		GIT_AUTHOR_EMAIL="$GIT_AUTHOR_EMAIL" \
+		GIT_AUTHOR_DATE="$GIT_AUTHOR_DATE" \
+		output git merge $STRATEGY -m "$msg" "$@"
+	then
+		git rerere
+		printf "%s\n" "$msg" > "$GIT_DIR"/MERGE_MSG
+		die Error redoing merge $rm_sha1
+	fi
+	unset rm_sha1
+}
+
 pick_one () {
 	no_ff=
 	case "$1" in -n) sha1=$2; no_ff=t ;; *) sha1=$1 ;; esac
@@ -192,22 +211,8 @@ pick_one_preserving_merges () {
 		echo $sha1 > "$DOTEST"/current-commit
 		case "$new_parents" in
 		' '*' '*)
-			# redo merge
-			author_script=$(get_author_ident_from_commit $sha1)
-			eval "$author_script"
-			msg="$(git cat-file commit $sha1 | sed -e '1,/^$/d')"
 			# No point in merging the first parent, that's HEAD
-			new_parents=${new_parents# $first_parent}
-			if ! GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
-				GIT_AUTHOR_EMAIL="$GIT_AUTHOR_EMAIL" \
-				GIT_AUTHOR_DATE="$GIT_AUTHOR_DATE" \
-				output git merge $STRATEGY -m "$msg" \
-					$new_parents
-			then
-				git rerere
-				printf "%s\n" "$msg" > "$GIT_DIR"/MERGE_MSG
-				die Error redoing merge $sha1
-			fi
+			redo_merge $sha1 ${new_parents# $first_parent}
 			;;
 		*)
 			output git cherry-pick "$@" ||
