@@ -11,7 +11,7 @@
 # http://article.gmane.org/gmane.comp.version-control.git/22407
 
 USAGE='(--continue | --abort | --skip | [--preserve-merges] [--first-parent]
-	[--verbose] [--onto <branch>] <upstream> [<branch>])'
+	[--preserve-tags] [--verbose] [--onto <branch>] <upstream> [<branch>])'
 
 OPTIONS_SPEC=
 . git-sh-setup
@@ -395,9 +395,31 @@ insert_value_at_key_into_list () {
 
 create_extended_todo_list () {
 	(
+	if test t = "${PRESERVE_TAGS:-}"
+	then
+		tag_list=$(git show-ref --abbrev=7 --tags | \
+			(
+			while read sha1 tag
+			do
+				tag=${tag#refs/tags/}
+				if test ${last_sha1:-0000} = $sha1
+				then
+					saved_tags="$saved_tags:$tag"
+				else
+					printf "%s" "${last_sha1:+ $last_sha1#$saved_tags}"
+					last_sha1=$sha1
+					saved_tags=$tag
+				fi
+			done
+			echo "${last_sha1:+ $last_sha1:$saved_tags}"
+			) )
+	else
+		tag_list=
+	fi
 	while IFS=_ read commit parents subject
 	do
-		if test "${last_parent:-$commit}" != "$commit"
+		if test t = "$PRESERVE_MERGES" -a \
+			"${last_parent:-$commit}" != "$commit"
 		then
 			if test t = "${delayed_mark:-f}"
 			then
@@ -413,6 +435,14 @@ create_extended_todo_list () {
 
 		get_value_from_list $commit "${marked_commits:-}" \
 			>/dev/null && echo mark
+
+		if tmp=$(get_value_from_list $commit "$tag_list")
+		then
+			for t in $(echo $tmp | tr : ' ')
+			do
+				echo tag $t
+			done
+		fi
 
 		case "$parents" in
 		*' '*)
@@ -573,6 +603,9 @@ do
 		FIRST_PARENT=t
 		PRESERVE_MERGES=t
 		;;
+	-t|--preserve-tags)
+		PRESERVE_TAGS=t
+		;;
 	-i|--interactive)
 		# yeah, we know
 		;;
@@ -629,11 +662,14 @@ do
 		SHORTONTO=$(git rev-parse --short=7 $ONTO)
 		common_rev_list_opts="--abbrev-commit --abbrev=7
 			--left-right --cherry-pick $UPSTREAM...$HEAD"
-		if test t = "$PRESERVE_MERGES" -o t = "${FIRST_PARENT:-f}"
+		if test t = "$PRESERVE_MERGES" -o t = "${FIRST_PARENT:-f}" \
+			-o t = "${PRESERVE_TAGS:-}"
 		then
 			opts=
 			test t = "${FIRST_PARENT:-f}" && \
 				opts="$opts --first-parent"
+			test t != "$PRESERVE_MERGES" && \
+				opts="$opts --no-merges"
 			git rev-list --pretty='format:%h_%p_%s' --topo-order \
 				$opts $common_rev_list_opts | \
 				grep -v ^commit | \

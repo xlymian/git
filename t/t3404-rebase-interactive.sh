@@ -319,6 +319,16 @@ test_expect_success 'tag sets tags' '
 		"$(git rev-parse HEAD^2~2 HEAD~2 HEAD~1 HEAD~1)"
 '
 
+test_expect_success 'interactive -t preserves tags' '
+	git rebase -i -p -t --onto dead-end master &&
+	test "$(git rev-parse bb-tag1 bb-tag2 bb-tag3a bb-tag3b)" = \
+		"$(git rev-parse HEAD^2~2 HEAD~2 HEAD~1 HEAD~1)" &&
+	head=$(git rev-parse HEAD) &&
+	git rebase -i -t dead-end &&
+	test "$(git rev-parse bb-tag1 bb-tag2 bb-tag3a bb-tag3b)" = \
+		"$(git rev-parse HEAD~7 $head~2 HEAD~1 HEAD~1)"
+'
+
 test_expect_success '--continue tries to commit' '
 	git checkout to-be-rebased &&
 	test_tick &&
