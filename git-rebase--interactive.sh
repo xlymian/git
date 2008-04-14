@@ -321,6 +321,12 @@ do_next () {
 		mark_action_done
 		output git reset --hard $tmp
 		;;
+	tag|t)
+		comment_for_reflog tag
+
+		mark_action_done
+		output git tag -f "$sha1"
+		;;
 	*)
 		warn "Unknown command: $command $sha1 $rest"
 		die_with_patch $sha1 "Please fix this in the file $TODO."
@@ -653,6 +659,7 @@ do
 #  reset commit = reset HEAD to the commit
 #  merge commit-M commit-P ... = redo merge commit-M with the
 #         current HEAD and the parents commit-P
+#  tag = reset tag to the current HEAD
 #
 # If you remove a line here THAT COMMIT WILL BE LOST.
 # However, if you remove everything, the rebase will be aborted.

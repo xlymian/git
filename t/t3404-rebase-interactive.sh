@@ -91,6 +91,9 @@ for line in $FAKE_LINES; do
 	merge*)
 		echo "merge ${line#merge}" | tr / ' '
 		echo "merge ${line#merge}" | tr / ' ' >> "$1";;
+	tag*)
+		echo "tag ${line#tag}"
+		echo "tag ${line#tag}" >> "$1";;
 	*)
 		sed -n "${line}{s/^pick/$action/; p;}" < "$1".tmp
 		sed -n "${line}{s/^pick/$action/; p;}" < "$1".tmp >> "$1"
@@ -304,6 +307,16 @@ test_expect_success 'interactive --first-parent gives a linear list' '
 	EXPECT_COUNT=6 FAKE_LINES="2 1 4 3 6 5" \
 		git rebase -i -f --onto master dead-end &&
 	test "$head" = "$(git rev-parse HEAD)"
+'
+
+test_expect_success 'tag sets tags' '
+	head=$(git rev-parse HEAD) &&
+	FAKE_LINES="1 2 3 4 5 tagbb-tag1 6 7 8 9 10 11 12 13 14 15 \
+		tagbb-tag2 16 tagbb-tag3a tagbb-tag3b 17 18 19 20 21 22" \
+		EXPECT_COUNT=22 git rebase -i -p master &&
+	test "$head" = "$(git rev-parse HEAD)" &&
+	test "$(git rev-parse bb-tag1 bb-tag2 bb-tag3a bb-tag3b)" = \
+		"$(git rev-parse HEAD^2~2 HEAD~2 HEAD~1 HEAD~1)"
 '
 
 test_expect_success '--continue tries to commit' '
