@@ -586,9 +586,9 @@ do
 			MERGES_OPTION=--no-merges
 		fi
 
-		SHORTUPSTREAM=$(git rev-parse --short $UPSTREAM)
-		SHORTHEAD=$(git rev-parse --short $HEAD)
-		SHORTONTO=$(git rev-parse --short $ONTO)
+		SHORTUPSTREAM=$(git rev-parse --short=7 $UPSTREAM)
+		SHORTHEAD=$(git rev-parse --short=7 $HEAD)
+		SHORTONTO=$(git rev-parse --short=7 $ONTO)
 		git rev-list $MERGES_OPTION --pretty=oneline --abbrev-commit \
 			--abbrev=7 --reverse --left-right --cherry-pick \
 			$UPSTREAM...$HEAD | \
