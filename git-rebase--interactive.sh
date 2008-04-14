@@ -35,6 +35,8 @@ mark the corrected paths with 'git add <paths>', and
 run 'git rebase --continue'"
 export GIT_CHERRY_PICK_HELP
 
+mark_prefix=refs/rebase-marks/
+
 warn () {
 	echo "$*" >&2
 }
@@ -105,7 +107,13 @@ die_with_patch () {
 }
 
 cleanup_before_quit () {
-	rm -rf "$DOTEST"
+	rm -rf "$DOTEST" &&
+	for ref in "$GIT_DIR/$mark_prefix"*
+	do
+		test "$ref" = "$GIT_DIR/$mark_prefix*" && continue
+		git update-ref -d "${ref#$GIT_DIR/}" "${ref#$GIT_DIR/}" || \
+			return 1
+	done
 }
 
 die_abort () {
@@ -244,6 +252,17 @@ peek_next_command () {
 	sed -n "1s/ .*$//p" < "$TODO"
 }
 
+mark_to_ref () {
+	case "$1" in
+	:[0-9]*)
+		echo "$mark_prefix$(printf %d ${1#:} 2>/dev/null)"
+		;;
+	*)
+		echo "$1"
+		;;
+	esac
+}
+
 do_next () {
 	rm -f "$DOTEST"/message "$DOTEST"/author-script \
 		"$DOTEST"/amend || exit
@@ -320,6 +339,15 @@ do_next () {
 			warn "Could not apply $sha1... $rest"
 			die_with_patch $sha1 ""
 		fi
+		;;
+	mark)
+		mark_action_done
+
+		mark=$(mark_to_ref :${sha1#:})
+		git rev-parse --verify "$mark" > /dev/null 2>&1 && \
+			warn "mark $sha1 already exist; overwriting it"
+
+		git update-ref "$mark" HEAD || die "update-ref failed"
 		;;
 	*)
 		warn "Unknown command: $command $sha1 $rest"
@@ -533,10 +561,15 @@ do
 
 # Rebase $SHORTUPSTREAM..$SHORTHEAD onto $SHORTONTO
 #
+# In the todo insn whenever you need to refer to a commit, in addition
+# to the usual commit object name, you can use ':mark' syntax to refer
+# to a commit previously marked with the 'mark' insn.
+#
 # Commands:
 #  pick = use commit
 #  edit = use commit, but stop for amending
 #  squash = use commit, but meld into previous commit
+#  mark :mark = mark the current HEAD for later reference
 #
 # If you remove a line here THAT COMMIT WILL BE LOST.
 # However, if you remove everything, the rebase will be aborted.

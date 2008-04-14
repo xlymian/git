@@ -82,6 +82,9 @@ for line in $FAKE_LINES; do
 	case $line in
 	squash|edit)
 		action="$line";;
+	mark*)
+		echo "mark ${line#mark}"
+		echo "mark ${line#mark}" >> "$1";;
 	*)
 		echo sed -n "${line}s/^pick/$action/p"
 		sed -n "${line}p" < "$1".tmp
@@ -187,6 +190,20 @@ test_expect_success '-p handles "no changes" gracefully' '
 	HEAD=$(git rev-parse HEAD) &&
 	git rebase -i -p HEAD^ &&
 	test $HEAD = $(git rev-parse HEAD)
+'
+
+test_expect_success 'setting marks works' '
+	git checkout master &&
+	FAKE_LINES="mark:0 2 1 mark:42 3 edit 4" git rebase -i HEAD~4 &&
+	marks_dir=.git/refs/rebase-marks &&
+	test -d $marks_dir &&
+	test $(ls $marks_dir | wc -l) -eq 2 &&
+	test "$(git rev-parse HEAD~4)" = \
+		"$(git rev-parse refs/rebase-marks/0)" &&
+	test "$(git rev-parse HEAD~2)" = \
+		"$(git rev-parse refs/rebase-marks/42)" &&
+	git rebase --abort &&
+	ls $marks_dir | wc -l | grep -Fx 0
 '
 
 test_expect_success 'preserve merges with -p' '
