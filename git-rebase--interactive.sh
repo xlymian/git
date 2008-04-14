@@ -104,8 +104,12 @@ die_with_patch () {
 	die "$2"
 }
 
-die_abort () {
+cleanup_before_quit () {
 	rm -rf "$DOTEST"
+}
+
+die_abort () {
+	cleanup_before_quit
 	die "$1"
 }
 
@@ -352,7 +356,7 @@ do_next () {
 		test ! -f "$DOTEST"/verbose ||
 			git diff-tree --stat $(cat "$DOTEST"/head)..HEAD
 	} &&
-	rm -rf "$DOTEST" &&
+	cleanup_before_quit &&
 	git gc --auto &&
 	warn "Successfully rebased and updated $HEADNAME."
 
@@ -414,7 +418,7 @@ do
 			;;
 		esac &&
 		output git reset --hard $HEAD &&
-		rm -rf "$DOTEST"
+		cleanup_before_quit
 		exit
 		;;
 	--skip)
