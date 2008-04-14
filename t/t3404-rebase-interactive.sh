@@ -258,7 +258,44 @@ test_expect_success 'preserve merges with -p' '
 	test $(git show HEAD~2:file1) = B
 '
 
+test_expect_success 'rebase with preserve merge forth and back is a noop' '
+	git checkout -b big-branch-1 master &&
+	test_tick &&
+	: > bb1a &&
+	git add bb1a &&
+	git commit -m "big branch commit 1" &&
+	: > bb1b &&
+	git add bb1b &&
+	git commit -m "big branch commit 2" &&
+	: > bb1c &&
+	git add bb1c &&
+	git commit -m "big branch commit 3" &&
+	git checkout -b big-branch-2 master &&
+	: > bb2a &&
+	git add bb2a &&
+	git commit -m "big branch commit 4" &&
+	: > bb2b &&
+	git add bb2b &&
+	git commit -m "big branch commit 5" &&
+	git merge big-branch-1~1 &&
+	git merge to-be-preserved &&
+	tbp_merge=$(git rev-parse HEAD) &&
+	: > bb2c &&
+	git add bb2c &&
+	git commit -m "big branch commit 6" &&
+	git merge big-branch-1 &&
+	head=$(git rev-parse HEAD) &&
+	FAKE_LINES="16 6 19 20 4 1 2 5 22" \
+		git rebase -i -p --onto dead-end master &&
+	test "$head" != "$(git rev-parse HEAD)" &&
+	FAKE_LINES="3 7 mark:10 8 9 5 1 2 merge$tbp_merge~1/:10 \
+		merge$tbp_merge/to-be-preserved 6 11" \
+		git rebase -i -p --onto master dead-end &&
+	test "$head" = "$(git rev-parse HEAD)"
+'
+
 test_expect_success '--continue tries to commit' '
+	git checkout to-be-rebased &&
 	test_tick &&
 	! git rebase -i --onto new-branch1 HEAD^ &&
 	echo resolved > file1 &&
