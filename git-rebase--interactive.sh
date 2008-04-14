@@ -10,8 +10,8 @@
 # The original idea comes from Eric W. Biederman, in
 # http://article.gmane.org/gmane.comp.version-control.git/22407
 
-USAGE='(--continue | --abort | --skip | [--preserve-merges] [--verbose]
-	[--onto <branch>] <upstream> [<branch>])'
+USAGE='(--continue | --abort | --skip | [--preserve-merges] [--first-parent]
+	[--verbose] [--onto <branch>] <upstream> [<branch>])'
 
 OPTIONS_SPEC=
 . git-sh-setup
@@ -563,6 +563,10 @@ do
 	-p|--preserve-merges)
 		PRESERVE_MERGES=t
 		;;
+	-f|--first-parent)
+		FIRST_PARENT=t
+		PRESERVE_MERGES=t
+		;;
 	-i|--interactive)
 		# yeah, we know
 		;;
@@ -619,10 +623,13 @@ do
 		SHORTONTO=$(git rev-parse --short=7 $ONTO)
 		common_rev_list_opts="--abbrev-commit --abbrev=7
 			--left-right --cherry-pick $UPSTREAM...$HEAD"
-		if test t = "$PRESERVE_MERGES"
+		if test t = "$PRESERVE_MERGES" -o t = "${FIRST_PARENT:-f}"
 		then
+			opts=
+			test t = "${FIRST_PARENT:-f}" && \
+				opts="$opts --first-parent"
 			git rev-list --pretty='format:%h_%p_%s' --topo-order \
-				$common_rev_list_opts | \
+				$opts $common_rev_list_opts | \
 				grep -v ^commit | \
 				create_extended_todo_list
 		else

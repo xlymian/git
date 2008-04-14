@@ -294,6 +294,18 @@ test_expect_success 'rebase with preserve merge forth and back is a noop' '
 	test "$head" = "$(git rev-parse HEAD)"
 '
 
+test_expect_success 'interactive --first-parent gives a linear list' '
+	head=$(git rev-parse HEAD) &&
+	EXPECT_COUNT=6 FAKE_LINES="2 1 4 3 6 5" \
+		git rebase -i -f --onto dead-end master &&
+	test "$head" != "$(git rev-parse HEAD)" &&
+	git rev-parse HEAD^^2 &&
+	test "$(git rev-parse HEAD~6)" = "$(git rev-parse dead-end)" &&
+	EXPECT_COUNT=6 FAKE_LINES="2 1 4 3 6 5" \
+		git rebase -i -f --onto master dead-end &&
+	test "$head" = "$(git rev-parse HEAD)"
+'
+
 test_expect_success '--continue tries to commit' '
 	git checkout to-be-rebased &&
 	test_tick &&
