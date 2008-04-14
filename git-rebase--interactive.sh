@@ -354,6 +354,28 @@ do_next () {
 
 		git update-ref "$mark" HEAD || die "update-ref failed"
 		;;
+	merge|m)
+		comment_for_reflog merge
+
+		if ! git rev-parse --verify $sha1 > /dev/null
+		then
+			die "Invalid reference merge '$sha1' in"
+					"$command $sha1 $rest"
+		fi
+
+		new_parents=
+		for p in $rest
+		do
+			new_parents="$new_parents $(mark_to_ref $p)"
+		done
+		new_parents="${new_parents# }"
+		test -n "$new_parents" || \
+			die "You forgot to give the parents for the" \
+				"merge $sha1. Please fix it in $TODO"
+
+		mark_action_done
+		redo_merge $sha1 $new_parents
+		;;
 	reset|r)
 		comment_for_reflog reset
 
@@ -585,6 +607,8 @@ do
 #  squash = use commit, but meld into previous commit
 #  mark :mark = mark the current HEAD for later reference
 #  reset commit = reset HEAD to the commit
+#  merge commit-M commit-P ... = redo merge commit-M with the
+#         current HEAD and the parents commit-P
 #
 # If you remove a line here THAT COMMIT WILL BE LOST.
 # However, if you remove everything, the rebase will be aborted.

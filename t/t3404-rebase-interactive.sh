@@ -88,6 +88,9 @@ for line in $FAKE_LINES; do
 	reset*)
 		echo "reset ${line#reset}"
 		echo "reset ${line#reset}" >> "$1";;
+	merge*)
+		echo "merge ${line#merge}" | tr / ' '
+		echo "merge ${line#merge}" | tr / ' ' >> "$1";;
 	*)
 		echo sed -n "${line}s/^pick/$action/p"
 		sed -n "${line}p" < "$1".tmp
@@ -221,6 +224,16 @@ test_expect_success 'reset to HEAD is a nop' '
 	head=$(git rev-parse --short HEAD) &&
 	FAKE_LINES="reset$head" git rebase -i HEAD~4 &&
 	test "$(git rev-parse --short HEAD)" = "$head"
+'
+
+test_expect_success 'merge redoes merges' '
+	test_tick &&
+	git merge dead-end &&
+	merge=$(git rev-parse HEAD) &&
+	git reset --hard HEAD~1 &&
+	FAKE_LINES="1 merge$merge/dead-end" git rebase -i HEAD~1 &&
+	test $merge = "$(git rev-parse HEAD)" &&
+	git reset --hard HEAD~1
 '
 
 test_expect_success 'preserve merges with -p' '
