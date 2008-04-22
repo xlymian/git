@@ -73,7 +73,7 @@ esac
 test -z "$EXPECT_COUNT" ||
 	test "$EXPECT_COUNT" = $(sed -e '/^#/d' -e '/^$/d' < "$1" | wc -l) ||
 	exit
-test -z "$FAKE_LINES" && exit
+test -z "$FAKE_LINES" && { grep -v '^#' "$1"; exit; }
 grep -v '^#' < "$1" > "$1".tmp
 rm -f "$1"
 cat "$1".tmp
@@ -82,10 +82,21 @@ for line in $FAKE_LINES; do
 	case $line in
 	squash|edit)
 		action="$line";;
+	mark*)
+		echo "mark ${line#mark}"
+		echo "mark ${line#mark}" >> "$1";;
+	reset*)
+		echo "reset ${line#reset}"
+		echo "reset ${line#reset}" >> "$1";;
+	merge*)
+		echo "merge ${line#merge}" | tr / ' '
+		echo "merge ${line#merge}" | tr / ' ' >> "$1";;
+	tag*)
+		echo "tag ${line#tag}"
+		echo "tag ${line#tag}" >> "$1";;
 	*)
-		echo sed -n "${line}s/^pick/$action/p"
-		sed -n "${line}p" < "$1".tmp
-		sed -n "${line}s/^pick/$action/p" < "$1".tmp >> "$1"
+		sed -n "${line}{s/^pick/$action/; p;}" < "$1".tmp
+		sed -n "${line}{s/^pick/$action/; p;}" < "$1".tmp >> "$1"
 		action=pick;;
 	esac
 done
@@ -189,6 +200,44 @@ test_expect_success '-p handles "no changes" gracefully' '
 	test $HEAD = $(git rev-parse HEAD)
 '
 
+test_expect_success 'setting marks works' '
+	git checkout master &&
+	FAKE_LINES="mark:0 2 1 mark:42 3 edit 4" git rebase -i HEAD~4 &&
+	marks_dir=.git/refs/rebase-marks &&
+	test -d $marks_dir &&
+	test $(ls $marks_dir | wc -l) -eq 2 &&
+	test "$(git rev-parse HEAD~4)" = \
+		"$(git rev-parse refs/rebase-marks/0)" &&
+	test "$(git rev-parse HEAD~2)" = \
+		"$(git rev-parse refs/rebase-marks/42)" &&
+	git rebase --abort &&
+	ls $marks_dir | wc -l | grep -Fx 0
+'
+
+test_expect_success 'reset with nonexistent mark fails' '
+	export FAKE_LINES="reset:0 1" &&
+	test_must_fail git rebase -i HEAD~1 &&
+	unset FAKE_LINES &&
+	git rebase --abort
+'
+
+test_expect_success 'reset to HEAD is a nop' '
+	test_tick &&
+	head=$(git rev-parse --short HEAD) &&
+	FAKE_LINES="reset$head" git rebase -i HEAD~4 &&
+	test "$(git rev-parse --short HEAD)" = "$head"
+'
+
+test_expect_success 'merge redoes merges' '
+	test_tick &&
+	git merge dead-end &&
+	merge=$(git rev-parse HEAD) &&
+	git reset --hard HEAD~1 &&
+	FAKE_LINES="1 merge$merge/dead-end" git rebase -i HEAD~1 &&
+	test $merge = "$(git rev-parse HEAD)" &&
+	git reset --hard HEAD~1
+'
+
 test_expect_success 'preserve merges with -p' '
 	git checkout -b to-be-preserved master^ &&
 	: > unrelated-file &&
@@ -212,7 +261,76 @@ test_expect_success 'preserve merges with -p' '
 	test $(git show HEAD~2:file1) = B
 '
 
+test_expect_success 'rebase with preserve merge forth and back is a noop' '
+	git checkout -b big-branch-1 master &&
+	test_tick &&
+	: > bb1a &&
+	git add bb1a &&
+	git commit -m "big branch commit 1" &&
+	: > bb1b &&
+	git add bb1b &&
+	git commit -m "big branch commit 2" &&
+	: > bb1c &&
+	git add bb1c &&
+	git commit -m "big branch commit 3" &&
+	git checkout -b big-branch-2 master &&
+	: > bb2a &&
+	git add bb2a &&
+	git commit -m "big branch commit 4" &&
+	: > bb2b &&
+	git add bb2b &&
+	git commit -m "big branch commit 5" &&
+	git merge big-branch-1~1 &&
+	git merge to-be-preserved &&
+	tbp_merge=$(git rev-parse HEAD) &&
+	: > bb2c &&
+	git add bb2c &&
+	git commit -m "big branch commit 6" &&
+	git merge big-branch-1 &&
+	head=$(git rev-parse HEAD) &&
+	FAKE_LINES="16 6 19 20 4 1 2 5 22" \
+		git rebase -i -p --onto dead-end master &&
+	test "$head" != "$(git rev-parse HEAD)" &&
+	FAKE_LINES="3 7 mark:10 8 9 5 1 2 merge$tbp_merge~1/:10 \
+		merge$tbp_merge/to-be-preserved 6 11" \
+		git rebase -i -p --onto master dead-end &&
+	test "$head" = "$(git rev-parse HEAD)"
+'
+
+test_expect_success 'interactive --first-parent gives a linear list' '
+	head=$(git rev-parse HEAD) &&
+	EXPECT_COUNT=6 FAKE_LINES="2 1 4 3 6 5" \
+		git rebase -i -f --onto dead-end master &&
+	test "$head" != "$(git rev-parse HEAD)" &&
+	git rev-parse HEAD^^2 &&
+	test "$(git rev-parse HEAD~6)" = "$(git rev-parse dead-end)" &&
+	EXPECT_COUNT=6 FAKE_LINES="2 1 4 3 6 5" \
+		git rebase -i -f --onto master dead-end &&
+	test "$head" = "$(git rev-parse HEAD)"
+'
+
+test_expect_success 'tag sets tags' '
+	head=$(git rev-parse HEAD) &&
+	FAKE_LINES="1 2 3 4 5 tagbb-tag1 6 7 8 9 10 11 12 13 14 15 \
+		tagbb-tag2 16 tagbb-tag3a tagbb-tag3b 17 18 19 20 21 22" \
+		EXPECT_COUNT=22 git rebase -i -p master &&
+	test "$head" = "$(git rev-parse HEAD)" &&
+	test "$(git rev-parse bb-tag1 bb-tag2 bb-tag3a bb-tag3b)" = \
+		"$(git rev-parse HEAD^2~2 HEAD~2 HEAD~1 HEAD~1)"
+'
+
+test_expect_success 'interactive -t preserves tags' '
+	git rebase -i -p -t --onto dead-end master &&
+	test "$(git rev-parse bb-tag1 bb-tag2 bb-tag3a bb-tag3b)" = \
+		"$(git rev-parse HEAD^2~2 HEAD~2 HEAD~1 HEAD~1)" &&
+	head=$(git rev-parse HEAD) &&
+	git rebase -i -t dead-end &&
+	test "$(git rev-parse bb-tag1 bb-tag2 bb-tag3a bb-tag3b)" = \
+		"$(git rev-parse HEAD~7 $head~2 HEAD~1 HEAD~1)"
+'
+
 test_expect_success '--continue tries to commit' '
+	git checkout to-be-rebased &&
 	test_tick &&
 	! git rebase -i --onto new-branch1 HEAD^ &&
 	echo resolved > file1 &&

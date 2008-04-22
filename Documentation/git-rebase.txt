@@ -11,6 +11,7 @@ SYNOPSIS
 'git-rebase' [-i | --interactive] [-v | --verbose] [-m | --merge]
 	[-s <strategy> | --strategy=<strategy>]
 	[-C<n>] [ --whitespace=<option>] [-p | --preserve-merges]
+	[-f | --first-parent] [-t | --preserve-tags]
 	[--onto <newbase>] <upstream> [<branch>]
 'git-rebase' --continue | --skip | --abort
 
@@ -246,6 +247,14 @@ OPTIONS
 -p, \--preserve-merges::
 	Instead of ignoring merges, try to recreate them.  This option
 	only works in interactive mode.
+
+-f, \--first-parent::
+	This option implies the option --preserve-merges, but instead of
+	showing all commits from the merged branches show only the
+	commits and merges following the first parent of each commit.
+
+-t, \--preserve-tags::
+	If one of the commits has a tag, reset it to the new commit object.
 
 include::merge-strategies.txt[]
 

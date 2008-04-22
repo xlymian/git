@@ -10,8 +10,8 @@
 # The original idea comes from Eric W. Biederman, in
 # http://article.gmane.org/gmane.comp.version-control.git/22407
 
-USAGE='(--continue | --abort | --skip | [--preserve-merges] [--verbose]
-	[--onto <branch>] <upstream> [<branch>])'
+USAGE='(--continue | --abort | --skip | [--preserve-merges] [--first-parent]
+	[--preserve-tags] [--verbose] [--onto <branch>] <upstream> [<branch>])'
 
 OPTIONS_SPEC=
 . git-sh-setup
@@ -22,11 +22,9 @@ TODO="$DOTEST"/git-rebase-todo
 DONE="$DOTEST"/done
 MSG="$DOTEST"/message
 SQUASH_MSG="$DOTEST"/message-squash
-REWRITTEN="$DOTEST"/rewritten
 PRESERVE_MERGES=
 STRATEGY=
 VERBOSE=
-test -d "$REWRITTEN" && PRESERVE_MERGES=t
 test -f "$DOTEST"/strategy && STRATEGY="$(cat "$DOTEST"/strategy)"
 test -f "$DOTEST"/verbose && VERBOSE=t
 
@@ -34,6 +32,8 @@ GIT_CHERRY_PICK_HELP="  After resolving the conflicts,
 mark the corrected paths with 'git add <paths>', and
 run 'git rebase --continue'"
 export GIT_CHERRY_PICK_HELP
+
+mark_prefix=refs/rebase-marks/
 
 warn () {
 	echo "$*" >&2
@@ -104,8 +104,18 @@ die_with_patch () {
 	die "$2"
 }
 
+cleanup_before_quit () {
+	rm -rf "$DOTEST" &&
+	for ref in "$GIT_DIR/$mark_prefix"*
+	do
+		test "$ref" = "$GIT_DIR/$mark_prefix*" && continue
+		git update-ref -d "${ref#$GIT_DIR/}" "${ref#$GIT_DIR/}" || \
+			return 1
+	done
+}
+
 die_abort () {
-	rm -rf "$DOTEST"
+	cleanup_before_quit
 	die "$1"
 }
 
@@ -113,12 +123,29 @@ has_action () {
 	grep '^[^#]' "$1" >/dev/null
 }
 
+redo_merge () {
+	rm_sha1=$1
+	shift
+
+	eval "$(get_author_ident_from_commit $rm_sha1)"
+	msg="$(git cat-file commit $rm_sha1 | sed -e '1,/^$/d')"
+
+	if ! GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
+		GIT_AUTHOR_EMAIL="$GIT_AUTHOR_EMAIL" \
+		GIT_AUTHOR_DATE="$GIT_AUTHOR_DATE" \
+		output git merge $STRATEGY -m "$msg" "$@"
+	then
+		git rerere
+		printf "%s\n" "$msg" > "$GIT_DIR"/MERGE_MSG
+		die Error redoing merge $rm_sha1
+	fi
+	unset rm_sha1
+}
+
 pick_one () {
 	no_ff=
 	case "$1" in -n) sha1=$2; no_ff=t ;; *) sha1=$1 ;; esac
 	output git rev-parse --verify $sha1 || die "Invalid commit name: $sha1"
-	test -d "$REWRITTEN" &&
-		pick_one_preserving_merges "$@" && return
 	parent_sha1=$(git rev-parse --verify $sha1^) ||
 		die "Could not get the parent of $sha1"
 	current_sha1=$(git rev-parse --verify HEAD)
@@ -130,80 +157,6 @@ pick_one () {
 	else
 		output git cherry-pick "$@"
 	fi
-}
-
-pick_one_preserving_merges () {
-	case "$1" in -n) sha1=$2 ;; *) sha1=$1 ;; esac
-	sha1=$(git rev-parse $sha1)
-
-	if test -f "$DOTEST"/current-commit
-	then
-		current_commit=$(cat "$DOTEST"/current-commit) &&
-		git rev-parse HEAD > "$REWRITTEN"/$current_commit &&
-		rm "$DOTEST"/current-commit ||
-		die "Cannot write current commit's replacement sha1"
-	fi
-
-	# rewrite parents; if none were rewritten, we can fast-forward.
-	fast_forward=t
-	preserve=t
-	new_parents=
-	for p in $(git rev-list --parents -1 $sha1 | cut -d' ' -f2-)
-	do
-		if test -f "$REWRITTEN"/$p
-		then
-			preserve=f
-			new_p=$(cat "$REWRITTEN"/$p)
-			test $p != $new_p && fast_forward=f
-			case "$new_parents" in
-			*$new_p*)
-				;; # do nothing; that parent is already there
-			*)
-				new_parents="$new_parents $new_p"
-				;;
-			esac
-		fi
-	done
-	case $fast_forward in
-	t)
-		output warn "Fast forward to $sha1"
-		test $preserve = f || echo $sha1 > "$REWRITTEN"/$sha1
-		;;
-	f)
-		test "a$1" = a-n && die "Refusing to squash a merge: $sha1"
-
-		first_parent=$(expr "$new_parents" : ' \([^ ]*\)')
-		# detach HEAD to current parent
-		output git checkout $first_parent 2> /dev/null ||
-			die "Cannot move HEAD to $first_parent"
-
-		echo $sha1 > "$DOTEST"/current-commit
-		case "$new_parents" in
-		' '*' '*)
-			# redo merge
-			author_script=$(get_author_ident_from_commit $sha1)
-			eval "$author_script"
-			msg="$(git cat-file commit $sha1 | sed -e '1,/^$/d')"
-			# No point in merging the first parent, that's HEAD
-			new_parents=${new_parents# $first_parent}
-			if ! GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
-				GIT_AUTHOR_EMAIL="$GIT_AUTHOR_EMAIL" \
-				GIT_AUTHOR_DATE="$GIT_AUTHOR_DATE" \
-				output git merge $STRATEGY -m "$msg" \
-					$new_parents
-			then
-				git rerere
-				printf "%s\n" "$msg" > "$GIT_DIR"/MERGE_MSG
-				die Error redoing merge $sha1
-			fi
-			;;
-		*)
-			output git cherry-pick "$@" ||
-				die_with_patch $sha1 "Could not pick $sha1"
-			;;
-		esac
-		;;
-	esac
 }
 
 nth_string () {
@@ -238,6 +191,17 @@ make_squash_message () {
 
 peek_next_command () {
 	sed -n "1s/ .*$//p" < "$TODO"
+}
+
+mark_to_ref () {
+	case "$1" in
+	:[0-9]*)
+		echo "$mark_prefix$(printf %d ${1#:} 2>/dev/null)"
+		;;
+	*)
+		echo "$1"
+		;;
+	esac
 }
 
 do_next () {
@@ -317,6 +281,52 @@ do_next () {
 			die_with_patch $sha1 ""
 		fi
 		;;
+	mark)
+		mark_action_done
+
+		mark=$(mark_to_ref :${sha1#:})
+		git rev-parse --verify "$mark" > /dev/null 2>&1 && \
+			warn "mark $sha1 already exist; overwriting it"
+
+		git update-ref "$mark" HEAD || die "update-ref failed"
+		;;
+	merge|m)
+		comment_for_reflog merge
+
+		if ! git rev-parse --verify $sha1 > /dev/null
+		then
+			die "Invalid reference merge '$sha1' in"
+					"$command $sha1 $rest"
+		fi
+
+		new_parents=
+		for p in $rest
+		do
+			new_parents="$new_parents $(mark_to_ref $p)"
+		done
+		new_parents="${new_parents# }"
+		test -n "$new_parents" || \
+			die "You forgot to give the parents for the" \
+				"merge $sha1. Please fix it in $TODO"
+
+		mark_action_done
+		redo_merge $sha1 $new_parents
+		;;
+	reset|r)
+		comment_for_reflog reset
+
+		tmp=$(git rev-parse --verify "$(mark_to_ref $sha1)") ||
+			die "Invalid parent '$sha1' in $command $sha1 $rest"
+
+		mark_action_done
+		output git reset --hard $tmp
+		;;
+	tag|t)
+		comment_for_reflog tag
+
+		mark_action_done
+		output git tag -f "$sha1"
+		;;
 	*)
 		warn "Unknown command: $command $sha1 $rest"
 		die_with_patch $sha1 "Please fix this in the file $TODO."
@@ -328,20 +338,7 @@ do_next () {
 	HEADNAME=$(cat "$DOTEST"/head-name) &&
 	OLDHEAD=$(cat "$DOTEST"/head) &&
 	SHORTONTO=$(git rev-parse --short $(cat "$DOTEST"/onto)) &&
-	if test -d "$REWRITTEN"
-	then
-		test -f "$DOTEST"/current-commit &&
-			current_commit=$(cat "$DOTEST"/current-commit) &&
-			git rev-parse HEAD > "$REWRITTEN"/$current_commit
-		if test -f "$REWRITTEN"/$OLDHEAD
-		then
-			NEWHEAD=$(cat "$REWRITTEN"/$OLDHEAD)
-		else
-			NEWHEAD=$OLDHEAD
-		fi
-	else
-		NEWHEAD=$(git rev-parse HEAD)
-	fi &&
+	NEWHEAD=$(git rev-parse HEAD) &&
 	case $HEADNAME in
 	refs/*)
 		message="$GIT_REFLOG_ACTION: $HEADNAME onto $SHORTONTO)" &&
@@ -352,7 +349,7 @@ do_next () {
 		test ! -f "$DOTEST"/verbose ||
 			git diff-tree --stat $(cat "$DOTEST"/head)..HEAD
 	} &&
-	rm -rf "$DOTEST" &&
+	cleanup_before_quit &&
 	git gc --auto &&
 	warn "Successfully rebased and updated $HEADNAME."
 
@@ -363,6 +360,160 @@ do_rest () {
 	while :
 	do
 		do_next
+	done
+}
+
+get_value_from_list () {
+	# args: "key" " key1#value1 key2#value2"
+	case "$2" in
+	*" $1#"*)
+		stm_tmp="${2#* $1#}"
+		echo "${stm_tmp%% *}"
+		unset stm_tmp
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+insert_value_at_key_into_list () {
+	# args: "value" "key" " key1#value1 key2#value2"
+	case "$3 " in
+	*" $2#$1 "*)
+		echo "$3"
+		;;
+	*" $2#"*)
+		echo "$3"
+		return 1
+		;;
+	*)
+		echo "$3 $2#$1"
+		;;
+	esac
+}
+
+create_extended_todo_list () {
+	(
+	if test t = "${PRESERVE_TAGS:-}"
+	then
+		tag_list=$(git show-ref --abbrev=7 --tags | \
+			(
+			while read sha1 tag
+			do
+				tag=${tag#refs/tags/}
+				if test ${last_sha1:-0000} = $sha1
+				then
+					saved_tags="$saved_tags:$tag"
+				else
+					printf "%s" "${last_sha1:+ $last_sha1#$saved_tags}"
+					last_sha1=$sha1
+					saved_tags=$tag
+				fi
+			done
+			echo "${last_sha1:+ $last_sha1:$saved_tags}"
+			) )
+	else
+		tag_list=
+	fi
+	while IFS=_ read commit parents subject
+	do
+		if test t = "$PRESERVE_MERGES" -a \
+			"${last_parent:-$commit}" != "$commit"
+		then
+			if test t = "${delayed_mark:-f}"
+			then
+				marked_commits=$(insert_value_at_key_into_list \
+					dummy $last_parent "${marked_commits:-}")
+				delayed_mark=f
+			fi
+			test "$last_parent" = $SHORTUPSTREAM && \
+				last_parent=$SHORTONTO
+			echo "reset $last_parent"
+		fi
+		last_parent="${parents%% *}"
+
+		get_value_from_list $commit "${marked_commits:-}" \
+			>/dev/null && echo mark
+
+		if tmp=$(get_value_from_list $commit "$tag_list")
+		then
+			for t in $(echo $tmp | tr : ' ')
+			do
+				echo tag $t
+			done
+		fi
+
+		case "$parents" in
+		*' '*)
+			delayed_mark=t
+			new_parents=
+			for p in ${parents#* }
+			do
+				marked_commits=$(insert_value_at_key_into_list \
+					dummy "$p" "${marked_commits:-}")
+				if test "$p" = $SHORTUPSTREAM
+				then
+					new_parents="$new_parents $SHORTONTO"
+				else
+					new_parents="$new_parents $p"
+				fi
+			done
+			unset p
+			echo merge $commit $new_parents
+			unset new_parents
+			;;
+		*)
+			echo "pick $commit $subject"
+			;;
+		esac
+	done
+	test -n "${last_parent:-}" -a "${last_parent:-}" != $SHORTUPSTREAM && \
+		echo reset $last_parent
+	) | \
+	tac | \
+	while read cmd args
+	do
+		: ${commit_mark_list:=} ${last_commit:=000}
+		case "$cmd" in
+		pick)
+			last_commit="${args%% *}"
+			;;
+		mark)
+			: ${next_mark:=0}
+			if commit_mark_list=$(insert_value_at_key_into_list \
+				$next_mark $last_commit "$commit_mark_list")
+			then
+				args=":$next_mark"
+				next_mark=$(($next_mark + 1))
+			else
+				die "Internal error: two marks for" \
+					"the same commit"
+			fi
+			;;
+		reset)
+			if tmp=$(get_value_from_list $args "$commit_mark_list")
+			then
+				args=":$tmp"
+			fi
+			;;
+		merge)
+			new_args=
+			for i in ${args#* }
+			do
+				if tmp=$(get_value_from_list $i \
+					"$commit_mark_list")
+				then
+					new_args="$new_args :$tmp"
+				else
+					new_args="$new_args $i"
+				fi
+			done
+			last_commit="${args%% *}"
+			args="$last_commit ${new_args# }"
+			;;
+		esac
+		echo "$cmd $args"
 	done
 }
 
@@ -414,7 +565,7 @@ do
 			;;
 		esac &&
 		output git reset --hard $HEAD &&
-		rm -rf "$DOTEST"
+		cleanup_before_quit
 		exit
 		;;
 	--skip)
@@ -447,6 +598,13 @@ do
 		;;
 	-p|--preserve-merges)
 		PRESERVE_MERGES=t
+		;;
+	-f|--first-parent)
+		FIRST_PARENT=t
+		PRESERVE_MERGES=t
+		;;
+	-t|--preserve-tags)
+		PRESERVE_TAGS=t
 		;;
 	-i|--interactive)
 		# yeah, we know
@@ -498,41 +656,46 @@ do
 		echo $ONTO > "$DOTEST"/onto
 		test -z "$STRATEGY" || echo "$STRATEGY" > "$DOTEST"/strategy
 		test t = "$VERBOSE" && : > "$DOTEST"/verbose
-		if test t = "$PRESERVE_MERGES"
-		then
-			# $REWRITTEN contains files for each commit that is
-			# reachable by at least one merge base of $HEAD and
-			# $UPSTREAM. They are not necessarily rewritten, but
-			# their children might be.
-			# This ensures that commits on merged, but otherwise
-			# unrelated side branches are left alone. (Think "X"
-			# in the man page's example.)
-			mkdir "$REWRITTEN" &&
-			for c in $(git merge-base --all $HEAD $UPSTREAM)
-			do
-				echo $ONTO > "$REWRITTEN"/$c ||
-					die "Could not init rewritten commits"
-			done
-			MERGES_OPTION=
-		else
-			MERGES_OPTION=--no-merges
-		fi
 
-		SHORTUPSTREAM=$(git rev-parse --short $UPSTREAM)
-		SHORTHEAD=$(git rev-parse --short $HEAD)
-		SHORTONTO=$(git rev-parse --short $ONTO)
-		git rev-list $MERGES_OPTION --pretty=oneline --abbrev-commit \
-			--abbrev=7 --reverse --left-right --cherry-pick \
-			$UPSTREAM...$HEAD | \
-			sed -n "s/^>/pick /p" > "$TODO"
+		SHORTUPSTREAM=$(git rev-parse --short=7 $UPSTREAM)
+		SHORTHEAD=$(git rev-parse --short=7 $HEAD)
+		SHORTONTO=$(git rev-parse --short=7 $ONTO)
+		common_rev_list_opts="--abbrev-commit --abbrev=7
+			--left-right --cherry-pick $UPSTREAM...$HEAD"
+		if test t = "$PRESERVE_MERGES" -o t = "${FIRST_PARENT:-f}" \
+			-o t = "${PRESERVE_TAGS:-}"
+		then
+			opts=
+			test t = "${FIRST_PARENT:-f}" && \
+				opts="$opts --first-parent"
+			test t != "$PRESERVE_MERGES" && \
+				opts="$opts --no-merges"
+			git rev-list --pretty='format:%h_%p_%s' --topo-order \
+				$opts $common_rev_list_opts | \
+				grep -v ^commit | \
+				create_extended_todo_list
+		else
+			git rev-list --no-merges --reverse --pretty=oneline \
+				 $common_rev_list_opts | sed -n "s/^>/pick /p"
+		fi > "$TODO"
+
 		cat >> "$TODO" << EOF
 
 # Rebase $SHORTUPSTREAM..$SHORTHEAD onto $SHORTONTO
+#
+# In the todo insn whenever you need to refer to a commit, in addition
+# to the usual commit object name, you can use ':mark' syntax to refer
+# to a commit previously marked with the 'mark' insn.
 #
 # Commands:
 #  pick = use commit
 #  edit = use commit, but stop for amending
 #  squash = use commit, but meld into previous commit
+#  mark :mark = mark the current HEAD for later reference
+#  reset commit = reset HEAD to the commit
+#  merge commit-M commit-P ... = redo merge commit-M with the
+#         current HEAD and the parents commit-P
+#  tag = reset tag to the current HEAD
 #
 # If you remove a line here THAT COMMIT WILL BE LOST.
 # However, if you remove everything, the rebase will be aborted.
