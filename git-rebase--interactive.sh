@@ -105,13 +105,11 @@ die_with_patch () {
 }
 
 cleanup_before_quit () {
-	rm -rf "$DOTEST" &&
-	for ref in "$GIT_DIR/$mark_prefix"*
+	for ref in $(git for-each-ref --format='%(refname)' "${mark_prefix%/}")
 	do
-		test "$ref" = "$GIT_DIR/$mark_prefix*" && continue
-		git update-ref -d "${ref#$GIT_DIR/}" "${ref#$GIT_DIR/}" || \
-			return 1
+		git update-ref -d "$ref" "$ref" || return 1
 	done
+	rm -rf "$DOTEST"
 }
 
 die_abort () {
@@ -194,14 +192,12 @@ peek_next_command () {
 }
 
 mark_to_ref () {
-	case "$1" in
-	:[0-9]*)
-		echo "$mark_prefix$(printf %d ${1#:} 2>/dev/null)"
-		;;
-	*)
+	if expr match "$1" "^:[0-9][0-9]*$" >/dev/null
+	then
+		echo "$mark_prefix$(printf %d ${1#:})"
+	else
 		echo "$1"
-		;;
-	esac
+	fi
 }
 
 do_next () {
@@ -285,6 +281,8 @@ do_next () {
 		mark_action_done
 
 		mark=$(mark_to_ref :${sha1#:})
+		test :${sha1#:} = "$mark" && die "Invalid mark '$sha1'"
+
 		git rev-parse --verify "$mark" > /dev/null 2>&1 && \
 			warn "mark $sha1 already exist; overwriting it"
 
