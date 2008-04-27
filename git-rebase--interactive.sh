@@ -192,7 +192,7 @@ peek_next_command () {
 }
 
 mark_to_ref () {
-	if expr match "$1" "^:[0-9][0-9]*$" >/dev/null
+	if expr "$1" : "^:[0-9][0-9]*$" >/dev/null
 	then
 		echo "$mark_prefix$(printf %d ${1#:})"
 	else
