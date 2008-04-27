@@ -469,7 +469,7 @@ create_extended_todo_list () {
 	test -n "${last_parent:-}" -a "${last_parent:-}" != $SHORTUPSTREAM && \
 		echo reset $last_parent
 	) | \
-	tac | \
+	perl -e 'print reverse <>' | \
 	while read cmd args
 	do
 		: ${commit_mark_list:=} ${last_commit:=000}
