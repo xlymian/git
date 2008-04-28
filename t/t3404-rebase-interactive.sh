@@ -211,7 +211,7 @@ test_expect_success 'setting marks works' '
 	test "$(git rev-parse HEAD~2)" = \
 		"$(git rev-parse refs/rebase-marks/42)" &&
 	git rebase --abort &&
-	ls $marks_dir | wc -l | grep -Fx 0
+	test 0 = $(ls $marks_dir | wc -l)
 '
 
 test_expect_success 'reset with nonexistent mark fails' '
