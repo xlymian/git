@@ -351,132 +351,6 @@ static int fill_mmfile(mmfile_t *mf, struct diff_filespec *one)
 	return 0;
 }
 
-struct diff_words_buffer {
-	mmfile_t text;
-	long alloc;
-	long current; /* output pointer */
-	int suppressed_newline;
-};
-
-static void diff_words_append(char *line, unsigned long len,
-		struct diff_words_buffer *buffer)
-{
-	if (buffer->text.size + len > buffer->alloc) {
-		buffer->alloc = (buffer->text.size + len) * 3 / 2;
-		buffer->text.ptr = xrealloc(buffer->text.ptr, buffer->alloc);
-	}
-	line++;
-	len--;
-	memcpy(buffer->text.ptr + buffer->text.size, line, len);
-	buffer->text.size += len;
-}
-
-struct diff_words_data {
-	struct xdiff_emit_state xm;
-	struct diff_words_buffer minus, plus;
-	FILE *file;
-};
-
-static void print_word(FILE *file, struct diff_words_buffer *buffer, int len, int color,
-		int suppress_newline)
-{
-	const char *ptr;
-	int eol = 0;
-
-	if (len == 0)
-		return;
-
-	ptr  = buffer->text.ptr + buffer->current;
-	buffer->current += len;
-
-	if (ptr[len - 1] == '\n') {
-		eol = 1;
-		len--;
-	}
-
-	fputs(diff_get_color(1, color), file);
-	fwrite(ptr, len, 1, file);
-	fputs(diff_get_color(1, DIFF_RESET), file);
-
-	if (eol) {
-		if (suppress_newline)
-			buffer->suppressed_newline = 1;
-		else
-			putc('\n', file);
-	}
-}
-
-static void fn_out_diff_words_aux(void *priv, char *line, unsigned long len)
-{
-	struct diff_words_data *diff_words = priv;
-
-	if (diff_words->minus.suppressed_newline) {
-		if (line[0] != '+')
-			putc('\n', diff_words->file);
-		diff_words->minus.suppressed_newline = 0;
-	}
-
-	len--;
-	switch (line[0]) {
-		case '-':
-			print_word(diff_words->file,
-				   &diff_words->minus, len, DIFF_FILE_OLD, 1);
-			break;
-		case '+':
-			print_word(diff_words->file,
-				   &diff_words->plus, len, DIFF_FILE_NEW, 0);
-			break;
-		case ' ':
-			print_word(diff_words->file,
-				   &diff_words->plus, len, DIFF_PLAIN, 0);
-			diff_words->minus.current += len;
-			break;
-	}
-}
-
-/* this executes the word diff on the accumulated buffers */
-static void diff_words_show(struct diff_words_data *diff_words)
-{
-	xpparam_t xpp;
-	xdemitconf_t xecfg;
-	xdemitcb_t ecb;
-	mmfile_t minus, plus;
-	int i;
-
-	memset(&xecfg, 0, sizeof(xecfg));
-	minus.size = diff_words->minus.text.size;
-	minus.ptr = xmalloc(minus.size);
-	memcpy(minus.ptr, diff_words->minus.text.ptr, minus.size);
-	for (i = 0; i < minus.size; i++)
-		if (isspace(minus.ptr[i]))
-			minus.ptr[i] = '\n';
-	diff_words->minus.current = 0;
-
-	plus.size = diff_words->plus.text.size;
-	plus.ptr = xmalloc(plus.size);
-	memcpy(plus.ptr, diff_words->plus.text.ptr, plus.size);
-	for (i = 0; i < plus.size; i++)
-		if (isspace(plus.ptr[i]))
-			plus.ptr[i] = '\n';
-	diff_words->plus.current = 0;
-
-	xpp.flags = XDF_NEED_MINIMAL;
-	xecfg.ctxlen = diff_words->minus.alloc + diff_words->plus.alloc;
-	ecb.outf = xdiff_outf;
-	ecb.priv = diff_words;
-	diff_words->xm.consume = fn_out_diff_words_aux;
-	xdi_diff(&minus, &plus, &xpp, &xecfg, &ecb);
-
-	free(minus.ptr);
-	free(plus.ptr);
-	diff_words->minus.text.size = diff_words->plus.text.size = 0;
-
-	if (diff_words->minus.suppressed_newline) {
-		putc('\n', diff_words->file);
-		diff_words->minus.suppressed_newline = 0;
-	}
-}
-
 typedef unsigned long (*sane_truncate_fn)(char *line, unsigned long len);
 
 struct emit_callback {
@@ -490,16 +364,150 @@ struct emit_callback {
 	FILE *file;
 };
 
+static size_t diff_words_tokenize(struct emit_callback *ecbdata,
+				  char *line, unsigned long len)
+{
+	/*
+	 * This function currently is deliberately done very stupid,
+	 * but passing ecbdata here means that you can potentially
+	 * implement different tokenization rules depending on
+	 * the content (e.g. "gitattributes(5)").
+	 */
+	int is_space;
+	char *line0 = line;
+
+	if (!len)
+		return 0;
+	/*
+	 * Always return LF at the end as a single separate token.
+	 */
+	if ((len == 1) && *line == '\n')
+		return 1;
+
+	is_space = isspace(*line);
+	while (len && (isspace(*line) == is_space)) {
+		line++;
+		len--;
+	}
+	if (is_space && !len && line[-1] == '\n')
+		line--;
+	return line - line0;
+}
+
+static void diff_words_append(struct emit_callback *ecbdata,
+			      char *line, unsigned long len,
+			      struct strbuf *text)
+{
+	/* Skip leading +/- first. */
+	line++;
+	len--;
+
+	/*
+	 * Tokenize and stuff the words in.
+	 */
+	while (len) {
+		size_t token_len = diff_words_tokenize(ecbdata, line, len);
+
+		if (line[0] != '\n') {
+			/*
+			 * A nonempty token has ' ' stuffed in front,
+			 * so that we can recover the original
+			 * end-of-line easily.  Stupid, but works.
+			 */
+			strbuf_add(text, " ", 1);
+			strbuf_add(text, line, token_len);
+			strbuf_add(text, "\n", 1);
+			len -= token_len;
+			line += token_len;
+		} else {
+			/* A real LF */
+			strbuf_add(text, "\n", 1);
+			break;
+		}
+	}
+}
+
+struct diff_words_data {
+	struct xdiff_emit_state xm;
+	struct strbuf minus;
+	struct strbuf plus;
+	FILE *file;
+};
+
+static void emit_line(FILE *file, const char *set, const char *reset, const char *line, int len)
+{
+	fputs(set, file);
+	fwrite(line, len, 1, file);
+	fputs(reset, file);
+}
+
+static void fn_out_diff_words_aux(void *priv, char *line, unsigned long len)
+{
+	struct diff_words_data *diff_words = priv;
+	const char *set;
+	const char *reset = diff_colors[DIFF_RESET];
+
+	switch (line[0]) {
+	case '-':
+		set = diff_colors[DIFF_FILE_OLD];
+		break;
+	case '+':
+		set = diff_colors[DIFF_FILE_NEW];
+		break;
+	case ' ':
+		set = diff_colors[DIFF_PLAIN];
+		break;
+	default:
+		return; /* omit @@ -j,k +l,m @@ header */
+	}
+
+	if (line[1] == ' ') {
+		/* A token */
+		line += 2;
+		len -= 3; /* drop the trailing LF */
+	} else {
+		/* A real LF */
+		line++;
+		len--;
+	}
+	emit_line(diff_words->file, set, reset, line, len);
+}
+
+/* this executes the word diff on the accumulated buffers */
+static void diff_words_show(struct diff_words_data *diff_words)
+{
+	xpparam_t xpp;
+	xdemitconf_t xecfg;
+	xdemitcb_t ecb;
+	mmfile_t minus, plus;
+	unsigned long sz;
+
+	memset(&xecfg, 0, sizeof(xecfg));
+
+	minus.ptr = strbuf_detach(&diff_words->minus, &sz);
+	minus.size = sz;
+	plus.ptr = strbuf_detach(&diff_words->plus, &sz);
+	plus.size = sz;
+
+	xpp.flags = XDF_NEED_MINIMAL;
+	/* hack to make it a single hunk to show all */
+	xecfg.ctxlen = minus.size + plus.size;
+	ecb.outf = xdiff_outf;
+	ecb.priv = diff_words;
+	diff_words->xm.consume = fn_out_diff_words_aux;
+	xdi_diff(&minus, &plus, &xpp, &xecfg, &ecb);
+
+	free(minus.ptr);
+	free(plus.ptr);
+}
+
 static void free_diff_words_data(struct emit_callback *ecbdata)
 {
 	if (ecbdata->diff_words) {
 		/* flush buffers */
-		if (ecbdata->diff_words->minus.text.size ||
-				ecbdata->diff_words->plus.text.size)
+		if (ecbdata->diff_words->minus.len ||
+		    ecbdata->diff_words->plus.len)
 			diff_words_show(ecbdata->diff_words);
-
-		free (ecbdata->diff_words->minus.text.ptr);
-		free (ecbdata->diff_words->plus.text.ptr);
 		free(ecbdata->diff_words);
 		ecbdata->diff_words = NULL;
 	}
@@ -510,13 +518,6 @@ const char *diff_get_color(int diff_use_color, enum color_diff ix)
 	if (diff_use_color)
 		return diff_colors[ix];
 	return "";
-}
-
-static void emit_line(FILE *file, const char *set, const char *reset, const char *line, int len)
-{
-	fputs(set, file);
-	fwrite(line, len, 1, file);
-	fputs(reset, file);
 }
 
 static void emit_add_line(const char *reset, struct emit_callback *ecbdata, const char *line, int len)
@@ -604,16 +605,16 @@ static void fn_out_consume(void *priv, char *line, unsigned long len)
 		free_diff_words_data(ecbdata);
 	if (ecbdata->diff_words) {
 		if (line[0] == '-') {
-			diff_words_append(line, len,
+			diff_words_append(ecbdata, line, len,
 					  &ecbdata->diff_words->minus);
 			return;
 		} else if (line[0] == '+') {
-			diff_words_append(line, len,
+			diff_words_append(ecbdata, line, len,
 					  &ecbdata->diff_words->plus);
 			return;
 		}
-		if (ecbdata->diff_words->minus.text.size ||
-		    ecbdata->diff_words->plus.text.size)
+		if (ecbdata->diff_words->minus.len ||
+		    ecbdata->diff_words->plus.len)
 			diff_words_show(ecbdata->diff_words);
 		line++;
 		len--;
@@ -1470,6 +1471,8 @@ static void builtin_diff(const char *name_a,
 		if (DIFF_OPT_TST(o, COLOR_DIFF_WORDS)) {
 			ecbdata.diff_words =
 				xcalloc(1, sizeof(struct diff_words_data));
+			strbuf_init(&ecbdata.diff_words->minus, 0);
+			strbuf_init(&ecbdata.diff_words->plus, 0);
 			ecbdata.diff_words->file = o->file;
 		}
 		xdi_diff(&mf1, &mf2, &xpp, &xecfg, &ecb);
