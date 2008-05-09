@@ -580,6 +580,7 @@ extern const char *git_author_info(int);
 extern const char *git_committer_info(int);
 extern const char *fmt_ident(const char *name, const char *email, const char *date_str, int);
 extern const char *fmt_name(const char *name, const char *email);
+extern int valid_ident(const char *buf, size_t size, int flag);
 
 struct checkout {
 	const char *base_dir;
