@@ -149,15 +149,13 @@ static int verify_tag(const char *buffer, size_t size)
 
 #undef PD_FMT
 
-int main(int argc, char **argv)
+int cmd_mktag(int argc, const char **argv, const char *prefix)
 {
 	struct strbuf buf;
 	unsigned char result_sha1[20];
 
 	if (argc != 1)
 		usage("git-mktag < signaturefile");
-
-	setup_git_directory();
 
 	strbuf_init(&buf, 0);
 	if (strbuf_read(&buf, 0, 4096) < 0) {
