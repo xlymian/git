@@ -39,7 +39,7 @@ static int verify_object(unsigned char *sha1, const char *expected_type)
 #define PD_FMT "%td"
 #endif
 
-static int verify_tag(char *buffer, unsigned long size)
+static int verify_tag(const char *buffer, size_t size)
 {
 	int typelen;
 	char type[20];
@@ -49,8 +49,6 @@ static int verify_tag(char *buffer, unsigned long size)
 
 	if (size < 84)
 		return error("wanna fool me ? you obviously got the size wrong !");
-
-	buffer[size] = 0;
 
 	/* Verify object line */
 	object = buffer;
