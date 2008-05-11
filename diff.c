@@ -368,29 +368,32 @@ static size_t diff_words_tokenize(struct emit_callback *ecbdata,
 				  char *line, unsigned long len)
 {
 	/*
-	 * This function currently is deliberately done very stupid,
+	 * This function currently is deliberately done very stupidly,
 	 * but passing ecbdata here means that you can potentially
 	 * implement different tokenization rules depending on
 	 * the content (e.g. "gitattributes(5)").
+	 *
+	 * The initial definition of a token is "as many WS, followed
+	 * by as many non WS, followed by as many WS".
 	 */
-	int is_space;
+
 	char *line0 = line;
 
 	if (!len)
 		return 0;
-	/*
-	 * Always return LF at the end as a single separate token.
-	 */
-	if ((len == 1) && *line == '\n')
-		return 1;
 
-	is_space = isspace(*line);
-	while (len && (isspace(*line) == is_space)) {
+	while (len && isspace(*line)) {
 		line++;
 		len--;
 	}
-	if (is_space && !len && line[-1] == '\n')
-		line--;
+	while (len && !isspace(*line)) {
+		line++;
+		len--;
+	}
+	while (len && isspace(*line)) {
+		line++;
+		len--;
+	}
 	return line - line0;
 }
 
@@ -408,22 +411,13 @@ static void diff_words_append(struct emit_callback *ecbdata,
 	while (len) {
 		size_t token_len = diff_words_tokenize(ecbdata, line, len);
 
-		if (line[0] != '\n') {
-			/*
-			 * A nonempty token has ' ' stuffed in front,
-			 * so that we can recover the original
-			 * end-of-line easily.  Stupid, but works.
-			 */
-			strbuf_add(text, " ", 1);
-			strbuf_add(text, line, token_len);
-			strbuf_add(text, "\n", 1);
-			len -= token_len;
-			line += token_len;
-		} else {
-			/* A real LF */
-			strbuf_add(text, "\n", 1);
+		if (!token_len)
 			break;
-		}
+
+		strbuf_add(text, line, token_len);
+		strbuf_add(text, "\n", 1);
+		len -= token_len;
+		line += token_len;
 	}
 }
 
@@ -431,6 +425,7 @@ struct diff_words_data {
 	struct xdiff_emit_state xm;
 	struct strbuf minus;
 	struct strbuf plus;
+	int suppressed_newline;
 	FILE *file;
 };
 
@@ -461,16 +456,17 @@ static void fn_out_diff_words_aux(void *priv, char *line, unsigned long len)
 		return; /* omit @@ -j,k +l,m @@ header */
 	}
 
-	if (line[1] == ' ') {
-		/* A token */
-		line += 2;
-		len -= 3; /* drop the trailing LF */
+	if (line[1] != '\n') {
+		/* Not at the EOL */
+		emit_line(diff_words->file, set, reset, line + 1, len - 2);
 	} else {
-		/* A real LF */
-		line++;
-		len--;
+		/* At EOL */
+		if (diff_words->suppressed_newline || line[0] == ' ') {
+			diff_words->suppressed_newline = 0;
+			emit_line(diff_words->file, set, reset, "\n", 1);
+		} else
+			diff_words->suppressed_newline = 0;
 	}
-	emit_line(diff_words->file, set, reset, line, len);
 }
 
 /* this executes the word diff on the accumulated buffers */
@@ -490,13 +486,17 @@ static void diff_words_show(struct diff_words_data *diff_words)
 	plus.size = sz;
 
 	xpp.flags = XDF_NEED_MINIMAL;
-	/* hack to make it a single hunk to show all */
-	xecfg.ctxlen = minus.size + plus.size;
+	xecfg.ctxlen = minus.size + plus.size; /* hack to make it a single hunk to show all */
 	ecb.outf = xdiff_outf;
 	ecb.priv = diff_words;
 	diff_words->xm.consume = fn_out_diff_words_aux;
+	diff_words->suppressed_newline = 0;
 	xdi_diff(&minus, &plus, &xpp, &xecfg, &ecb);
 
+	if (diff_words->suppressed_newline) {
+		putc('\n', diff_words->file);
+		diff_words->suppressed_newline = 0;
+	}
 	free(minus.ptr);
 	free(plus.ptr);
 }
