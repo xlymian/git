@@ -6,6 +6,7 @@
 #include "diff.h"
 #include "refs.h"
 #include "revision.h"
+#include "graph.h"
 #include "grep.h"
 #include "reflog-walk.h"
 #include "patch-ids.h"
@@ -1104,7 +1105,8 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 				}
 			}
 			if (!strcmp(arg, "--parents")) {
-				revs->parents = 1;
+				revs->rewrite_parents = 1;
+				revs->print_parents = 1;
 				continue;
 			}
 			if (!strcmp(arg, "--dense")) {
@@ -1199,6 +1201,12 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 			if (!prefixcmp(arg, "--pretty")) {
 				revs->verbose_header = 1;
 				get_commit_format(arg+8, revs);
+				continue;
+			}
+			if (!prefixcmp(arg, "--graph")) {
+				revs->topo_order = 1;
+				revs->rewrite_parents = 1;
+				revs->graph = graph_init();
 				continue;
 			}
 			if (!strcmp(arg, "--root")) {
@@ -1399,8 +1407,18 @@ int setup_revisions(int argc, const char **argv, struct rev_info *revs, const ch
 
 	if (revs->reverse && revs->reflog_info)
 		die("cannot combine --reverse with --walk-reflogs");
-	if (revs->parents && revs->children.name)
+	if (revs->rewrite_parents && revs->children.name)
 		die("cannot combine --parents and --children");
+
+	/*
+	 * Limitations on the graph functionality
+	 */
+	if (revs->reverse && revs->graph)
+		die("cannot combine --reverse with --graph");
+
+	if (revs->reflog_info && revs->graph)
+		die("cannot combine --walk-reflogs with --graph");
+
 	return left;
 }
 
@@ -1533,7 +1551,7 @@ static int commit_match(struct commit *commit, struct rev_info *opt)
 
 static inline int want_ancestry(struct rev_info *revs)
 {
-	return (revs->parents || revs->children.name);
+	return (revs->rewrite_parents || revs->children.name);
 }
 
 enum commit_action simplify_commit(struct rev_info *revs, struct commit *commit)
@@ -1629,7 +1647,7 @@ static void gc_boundary(struct object_array *array)
 	}
 }
 
-struct commit *get_revision(struct rev_info *revs)
+static struct commit *get_revision_internal(struct rev_info *revs)
 {
 	struct commit *c = NULL;
 	struct commit_list *l;
@@ -1734,5 +1752,13 @@ struct commit *get_revision(struct rev_info *revs)
 		add_object_array(p, NULL, &revs->boundary_commits);
 	}
 
+	return c;
+}
+
+struct commit *get_revision(struct rev_info *revs)
+{
+	struct commit *c = get_revision_internal(revs);
+	if (c && revs->graph)
+		graph_update(revs->graph, c);
 	return c;
 }
