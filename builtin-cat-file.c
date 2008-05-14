@@ -199,7 +199,7 @@ int cmd_cat_file(int argc, const char **argv, const char *prefix)
 	int i, opt = 0, batch = 0, batch_check = 0;
 	const char *exp_type = NULL, *obj_name = NULL;
 
-	git_config(git_default_config);
+	git_config(git_default_config, NULL);
 
 	for (i = 1; i < argc; ++i) {
 		const char *arg = argv[i];
