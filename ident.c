@@ -167,6 +167,75 @@ static int copy(char *buf, size_t size, int offset, const char *src)
 	return offset;
 }
 
+int valid_ident(const char *buf, size_t size, int flag)
+{
+	const char *s, *lb, *rb;
+	int name_addr_only = (flag & IDENT_NO_DATE);
+
+	/* check for leading crud */
+	if (crud(*buf))
+		return 0;
+
+	/* Find start of email and check for disallowed chars in name */
+	if (!(lb = strstr(buf, " <")) || strpbrk(buf, "<>\n") < lb)
+		return 0;
+
+	/* Check for empty name and trailing crud in name */
+	if (lb == buf || crud(lb[-1]))
+		return 0;
+
+	/* Find end of email and check for disallowed chars in email */
+	if (!(rb = strchr(lb+2, '>')) || strpbrk(lb+2, "><\n ") < rb)
+		return 0;
+
+	/* Check for leading or trailing crud in email */
+	if (rb > lb+2 && (crud(lb[2]) || crud(rb[-1])))
+		return 0;
+
+	s = rb+1;
+	if (!name_addr_only) {
+		char tz[5];
+		size_t len;
+
+		/* a space separates email from timestamp */
+		if (*s != ' ')
+			return 0;
+		s++;
+
+		/*
+		 * timestamp, 1 or more digits followed by space.
+		 * fast-import at least assumes the timestamp and
+		 * timezone fields will be 23 bytes or less. That
+		 * leaves 17 bytes for the timestamp.
+		 */
+		if (!(len = strspn(s, "0123456789")) || len > 17)
+			return 0;
+		s += len;
+
+		/* a space separates timestamp from timezone */
+		if (*s != ' ')
+			return 0;
+		s++;
+
+		/*
+		 * timezone, 5 digits [+-]hhmm, max. 1400
+		 * A buffer is used here to hold the timezone characters
+		 * since our string may not be nul terminated immediately
+		 * after the timezone field. Though it must adhere to the
+		 * size parameter supplied by the caller.
+		 */
+		if (!((s[0] == '+' || s[0] == '-') &&
+		      strlcpy(tz, s+1, 5) >= 4 &&
+		      strspn(tz, "0123456789") == 4 &&
+		      atoi(tz) <= 1400))
+			return 0;
+
+		s += 5;
+	}
+
+	return (s - buf == size);
+}
+
 static const char au_env[] = "GIT_AUTHOR_NAME";
 static const char co_env[] = "GIT_COMMITTER_NAME";
 static const char *env_hint =
