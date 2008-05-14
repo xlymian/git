@@ -11,6 +11,7 @@
 #include "cache-tree.h"
 #include "diff.h"
 #include "revision.h"
+#include "replay.h"
 
 /*
  * This implements the builtins revert and cherry-pick.
@@ -260,6 +261,27 @@ static int index_is_dirty(void)
 	return !!DIFF_OPT_TST(&rev.diffopt, HAS_CHANGES);
 }
 
+/*
+ * Apply change to bring base into next to head.  Use next_label and
+ * "HEAD" as the conflict marker if needed.  write the results out to
+ * the index and the working tree, and return zero on successful
+ * merge, or non-zero on unsuccessful merge.
+ */
+static int merge_changes(const char *head_sha1,
+			 const char *base_sha1,
+			 const char *next_sha1,
+			 const char *next_label)
+{
+	int status;
+
+	status = replay_trees(base_sha1, head_sha1, "HEAD",
+			      next_sha1, next_label);
+	if (status >= 0)
+		return status;
+	return merge_recursive(base_sha1, head_sha1, "HEAD",
+			       next_sha1, next_label);
+}
+
 static int revert_or_cherry_pick(int argc, const char **argv)
 {
 	unsigned char head[20];
@@ -368,10 +390,10 @@ static int revert_or_cherry_pick(int argc, const char **argv)
 		}
 	}
 
-	if (merge_recursive(sha1_to_hex(base->object.sha1),
-				sha1_to_hex(head), "HEAD",
-				sha1_to_hex(next->object.sha1), oneline) ||
-			write_cache_as_tree(head, 0, NULL)) {
+	if (merge_changes(sha1_to_hex(head),
+			  sha1_to_hex(base->object.sha1),
+			  sha1_to_hex(next->object.sha1), oneline) ||
+	    write_cache_as_tree(head, 0, NULL)) {
 		add_to_msg("\nConflicts:\n\n");
 		read_cache();
 		for (i = 0; i < active_nr;) {
