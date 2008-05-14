@@ -254,8 +254,8 @@ static int create_default_files(const char *template_path)
 		}
 	}
 
-	/* Check if symlink is supported in the work tree */
 	if (!reinit) {
+		/* Check if symlink is supported in the work tree */
 		path[len] = 0;
 		strcpy(path + len, "tXXXXXX");
 		if (!close(xmkstemp(path)) &&
@@ -266,6 +266,12 @@ static int create_default_files(const char *template_path)
 			unlink(path); /* good */
 		else
 			git_config_set("core.symlinks", "false");
+
+		/* Check if the filesystem is case-insensitive */
+		path[len] = 0;
+		strcpy(path + len, "CoNfIg");
+		if (!access(path, F_OK))
+			git_config_set("core.ignorecase", "true");
 	}
 
 	return reinit;
