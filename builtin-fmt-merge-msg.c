@@ -8,17 +8,12 @@
 static const char *fmt_merge_msg_usage =
 	"git-fmt-merge-msg [--log] [--no-log] [--file <file>]";
 
-static int merge_summary;
+static int merge_log;
 
 static int fmt_merge_msg_config(const char *key, const char *value)
 {
-	static int found_merge_log = 0;
-	if (!strcmp("merge.log", key)) {
-		found_merge_log = 1;
-		merge_summary = git_config_bool(key, value);
-	}
-	if (!found_merge_log && !strcmp("merge.summary", key))
-		merge_summary = git_config_bool(key, value);
+	if (!strcmp("merge.log", key))
+		merge_log = git_config_bool(key, value);
 	return 0;
 }
 
@@ -263,11 +258,10 @@ int cmd_fmt_merge_msg(int argc, const char **argv, const char *prefix)
 	git_config(fmt_merge_msg_config);
 
 	while (argc > 1) {
-		if (!strcmp(argv[1], "--log") || !strcmp(argv[1], "--summary"))
-			merge_summary = 1;
-		else if (!strcmp(argv[1], "--no-log")
-				|| !strcmp(argv[1], "--no-summary"))
-			merge_summary = 0;
+		if (!strcmp(argv[1], "--log"))
+			merge_log = 1;
+		else if (!strcmp(argv[1], "--no-log"))
+			merge_log = 0;
 		else if (!strcmp(argv[1], "-F") || !strcmp(argv[1], "--file")) {
 			if (argc < 3)
 				die ("Which file?");
@@ -348,7 +342,7 @@ int cmd_fmt_merge_msg(int argc, const char **argv, const char *prefix)
 	else
 		printf(" into %s\n", current_branch);
 
-	if (merge_summary) {
+	if (merge_log) {
 		struct commit *head;
 		struct rev_info rev;
 

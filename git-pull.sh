@@ -23,9 +23,9 @@ rebase=$(git config --bool branch.$curr_branch_short.rebase)
 while :
 do
 	case "$1" in
-	-n|--no-stat|--no-summary)
+	-n|--no-stat)
 		no_stat=-n ;;
-	--stat|--summary)
+	--stat)
 		no_stat=$1 ;;
 	--log|--no-log)
 		log_arg=$1 ;;

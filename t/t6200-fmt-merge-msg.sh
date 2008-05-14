@@ -106,25 +106,10 @@ Merge branch 'left'
   Common #1
 EOF
 
-test_expect_success 'merge-msg test #3-1' '
+test_expect_success 'merge-msg test #3' '
 
 	git config --unset-all merge.log
-	git config --unset-all merge.summary
 	git config merge.log true &&
-
-	git checkout master &&
-	setdate &&
-	git fetch . left &&
-
-	git fmt-merge-msg <.git/FETCH_HEAD >actual &&
-	git diff actual expected
-'
-
-test_expect_success 'merge-msg test #3-2' '
-
-	git config --unset-all merge.log
-	git config --unset-all merge.summary
-	git config merge.summary true &&
 
 	git checkout master &&
 	setdate &&
@@ -152,10 +137,9 @@ Merge branches 'left' and 'right'
   Common #1
 EOF
 
-test_expect_success 'merge-msg test #4-1' '
+test_expect_success 'merge-msg test #4' '
 
 	git config --unset-all merge.log
-	git config --unset-all merge.summary
 	git config merge.log true &&
 
 	git checkout master &&
@@ -166,39 +150,10 @@ test_expect_success 'merge-msg test #4-1' '
 	git diff actual expected
 '
 
-test_expect_success 'merge-msg test #4-2' '
+test_expect_success 'merge-msg test #5' '
 
 	git config --unset-all merge.log
-	git config --unset-all merge.summary
-	git config merge.summary true &&
-
-	git checkout master &&
-	setdate &&
-	git fetch . left right &&
-
-	git fmt-merge-msg <.git/FETCH_HEAD >actual &&
-	git diff actual expected
-'
-
-test_expect_success 'merge-msg test #5-1' '
-
-	git config --unset-all merge.log
-	git config --unset-all merge.summary
 	git config merge.log yes &&
-
-	git checkout master &&
-	setdate &&
-	git fetch . left right &&
-
-	git fmt-merge-msg <.git/FETCH_HEAD >actual &&
-	git diff actual expected
-'
-
-test_expect_success 'merge-msg test #5-2' '
-
-	git config --unset-all merge.log
-	git config --unset-all merge.summary
-	git config merge.summary yes &&
 
 	git checkout master &&
 	setdate &&
