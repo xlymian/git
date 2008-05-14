@@ -76,30 +76,15 @@ static void pprint_tag(const unsigned char *sha1, const char *buf, unsigned long
 		write_or_die(1, cp, endp - cp);
 }
 
-int cmd_cat_file(int argc, const char **argv, const char *prefix)
+static int cat_one_file(int opt, const char *exp_type, const char *obj_name)
 {
 	unsigned char sha1[20];
 	enum object_type type;
 	void *buf;
 	unsigned long size;
-	int opt;
-	const char *exp_type, *obj_name;
-
-	git_config(git_default_config);
-	if (argc != 3)
-		usage("git-cat-file [-t|-s|-e|-p|<type>] <sha1>");
-	exp_type = argv[1];
-	obj_name = argv[2];
 
 	if (get_sha1(obj_name, sha1))
 		die("Not a valid object name %s", obj_name);
-
-	opt = 0;
-	if ( exp_type[0] == '-' ) {
-		opt = exp_type[1];
-		if ( !opt || exp_type[2] )
-			opt = -1; /* Not a single character option */
-	}
 
 	buf = NULL;
 	switch (opt) {
@@ -156,4 +141,140 @@ int cmd_cat_file(int argc, const char **argv, const char *prefix)
 
 	write_or_die(1, buf, size);
 	return 0;
+}
+
+static int batch_one_object(const char *obj_name, int print_contents)
+{
+	unsigned char sha1[20];
+	enum object_type type;
+	unsigned long size;
+	void *contents = contents;
+
+	if (!obj_name)
+	   return 1;
+
+	if (get_sha1(obj_name, sha1)) {
+		printf("%s missing\n", obj_name);
+		return 0;
+	}
+
+	if (print_contents)
+		contents = read_sha1_file(sha1, &type, &size);
+	else
+		type = sha1_object_info(sha1, &size);
+
+	if (type <= 0)
+		return 1;
+
+	printf("%s %s %lu\n", sha1_to_hex(sha1), typename(type), size);
+	fflush(stdout);
+
+	if (print_contents) {
+		write_or_die(1, contents, size);
+		printf("\n");
+		fflush(stdout);
+	}
+
+	return 0;
+}
+
+static int batch_objects(int print_contents)
+{
+	struct strbuf buf;
+
+	strbuf_init(&buf, 0);
+	while (strbuf_getline(&buf, stdin, '\n') != EOF) {
+		int error = batch_one_object(buf.buf, print_contents);
+		if (error)
+			return error;
+	}
+
+	return 0;
+}
+
+static const char cat_file_usage[] = "git-cat-file [ [-t|-s|-e|-p|<type>] <sha1> | [--batch|--batch-check] < <list_of_sha1s> ]";
+
+int cmd_cat_file(int argc, const char **argv, const char *prefix)
+{
+	int i, opt = 0, batch = 0, batch_check = 0;
+	const char *exp_type = NULL, *obj_name = NULL;
+
+	git_config(git_default_config);
+
+	for (i = 1; i < argc; ++i) {
+		const char *arg = argv[i];
+		int is_batch = 0, is_batch_check = 0;
+
+		is_batch = !strcmp(arg, "--batch");
+		if (!is_batch)
+			is_batch_check = !strcmp(arg, "--batch-check");
+
+		if (is_batch || is_batch_check) {
+			if (opt) {
+				error("git-cat-file: Can't use %s with -%c", arg, opt);
+				usage(cat_file_usage);
+			} else if (exp_type) {
+				error("git-cat-file: Can't use %s when a type (\"%s\") is specified", arg, exp_type);
+				usage(cat_file_usage);
+			} else if (obj_name) {
+				error("git-cat-file: Can't use %s when an object (\"%s\") is specified", arg, obj_name);
+				usage(cat_file_usage);
+			}
+
+			if ((is_batch && batch_check) || (is_batch_check && batch)) {
+				error("git-cat-file: Can't use %s with %s", arg, is_batch ? "--batch-check" : "--batch");
+				usage(cat_file_usage);
+			}
+
+			if (is_batch)
+				batch = 1;
+			else
+				batch_check = 1;
+
+			continue;
+		}
+
+		if (!strcmp(arg, "-t") || !strcmp(arg, "-s") || !strcmp(arg, "-e") || !strcmp(arg, "-p")) {
+			if (batch || batch_check) {
+				error("git-cat-file: Can't use %s with %s", arg, batch ? "--batch" : "--batch-check");
+				usage(cat_file_usage);
+			}
+
+			exp_type = arg;
+			opt = exp_type[1];
+			continue;
+		}
+
+		if (arg[0] == '-')
+			usage(cat_file_usage);
+
+		if (!exp_type) {
+			if (batch || batch_check) {
+				error("git-cat-file: Can't specify a type (\"%s\") with %s", arg, batch ? "--batch" : "--batch-check");
+				usage(cat_file_usage);
+			}
+
+			exp_type = arg;
+			continue;
+		}
+
+		if (obj_name)
+			usage(cat_file_usage);
+
+		// We should have hit one of the earlier if (batch || batch_check) cases before
+		// getting here.
+		assert(!batch);
+		assert(!batch_check);
+
+		obj_name = arg;
+		break;
+	}
+
+	if (batch || batch_check)
+		return batch_objects(batch);
+
+	if (!exp_type || !obj_name)
+		usage(cat_file_usage);
+
+	return cat_one_file(opt, exp_type, obj_name);
 }
