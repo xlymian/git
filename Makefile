@@ -612,6 +612,9 @@ ifeq ($(uname_O),Cygwin)
 	X = .exe
 endif
 ifeq ($(uname_S),FreeBSD)
+	ifeq ($(shell expr "$(uname_R)" : '4\.7'),3)
+		NO_STRTOUMAX = YesPlease
+	endif
 	NEEDS_LIBICONV = YesPlease
 	NO_MEMMEM = YesPlease
 	BASIC_CFLAGS += -I/usr/local/include
